@@ -22,7 +22,11 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseTechdommeChannelIdFromSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { wireTechdommeIntoSessionCreate } from "../techdomme/integration.js";
+import type { TechdommeSessionContext } from "../techdomme/middleware.js";
+import { getTechdommeSingletons } from "../techdomme/gateway-singleton.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
@@ -677,6 +681,36 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         cached: runMeta?.cached === true,
       });
 
+    // Techdomme gateway-skin (Spec 0): attach the activation context to
+    // the freshly-created session so the extension entry point can read
+    // `session.techdomme.active` on the first turn. Best-effort: any
+    // failure is logged + ignored — the openclaw session-create pipeline
+    // must continue working even if the techdomme database is
+    // unreachable. The middleware's own fail-closed behavior covers
+    // the resolver path.
+    const techdommeChannelId = parseTechdommeChannelIdFromSessionKey(created.key);
+    let techdommeSession: TechdommeSessionContext | undefined;
+    try {
+      const { provider } = getTechdommeSingletons();
+      const userId =
+        typeof client?.connect?.userId === "string" ? client.connect.userId : "anonymous";
+      techdommeSession = await wireTechdommeIntoSessionCreate({
+        session: {
+          sessionId: created.entry.sessionId,
+          key: created.key,
+          userId,
+          channelId: techdommeChannelId,
+        },
+        provider,
+        extensionVersion: "0.1.0",
+      });
+    } catch (err) {
+      // The activation resolver already fails closed. We just log.
+      sessionLog("warn", "techdomme session-start attach failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     respond(
       true,
       {
@@ -689,6 +723,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         ...(!created.resetExisting && runError ? { runError } : {}),
         resolved: created.resolved,
         ...(createdWorktree ? { worktree: createdWorktree } : {}),
+        ...(techdommeSession ? { techdomme: techdommeSession } : {}),
       },
       undefined,
     );
