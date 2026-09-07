@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/techdomme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Techdomme gateway-skin — persona overlay + skill bundle for tech-help in FemDom mode. Spec 0 ships the platform; per-skill specs add skills.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

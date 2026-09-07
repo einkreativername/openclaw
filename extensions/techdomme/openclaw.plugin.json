@@ -1,0 +1,17 @@
+{
+  "id": "techdomme",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "Techdomme",
+  "description": "FemDom-coded tech-help mode. Adds a persona overlay and a skill bundle to any active agent when the user has opted in. Spec 0 ships the platform; per-skill specs add skills one file at a time.",
+  "doctorHealthChecks": false,
+  "doctorContract": {
+    "configRepair": false
+  },
+  "extensionFormat": "openclaw-plugin/v1",
+  "openclawSkillNamespaces": [
+    "techdomme:*"
+  ]
+}
