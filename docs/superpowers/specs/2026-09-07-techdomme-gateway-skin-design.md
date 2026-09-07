@@ -50,41 +50,48 @@ First concrete slice of the techdomme feature: a **Gateway-Skin** that turns the
 
 ## §0.2 Data Model + Activation Flow
 
-**Data model (Drizzle schema):**
+**Data model (SQLite via Kysely, matching the existing openclaw state-schema conventions):**
+
+The implementation lives in `src/state/openclaw-state-schema.sql` (appended at the bottom) and bumps `OPENCLAW_STATE_SCHEMA_VERSION` from 16 to 17. The pattern matches sibling tables in that file: `CREATE TABLE IF NOT EXISTS`, `STRICT` modifier, `INTEGER NOT NULL` ms timestamps, `snake_case` columns, no `SERIAL`/`BIGSERIAL` (SQLite uses `INTEGER PRIMARY KEY` with rowid alias), no `REFERENCES` (SQLite foreign-key enforcement is opt-in and the rest of the schema is FK-free).
 
 ```sql
 -- One row per user. Created on first toggle, never deleted.
-CREATE TABLE user_techdomme_prefs (
-  user_id           TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  techdomme_enabled BOOLEAN NOT NULL DEFAULT false,
-  locale            TEXT NOT NULL DEFAULT 'en',
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+CREATE TABLE IF NOT EXISTS user_techdomme_prefs (
+  user_id TEXT NOT NULL PRIMARY KEY,
+  techdomme_enabled INTEGER NOT NULL DEFAULT 0 CHECK (techdomme_enabled IN (0, 1)),
+  locale TEXT NOT NULL DEFAULT 'en',
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
 
--- One row per channel. NULL = inherit user default; non-NULL = explicit override.
-CREATE TABLE channel_techdomme_overrides (
-  channel_id        TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
-  techdomme_enabled BOOLEAN NULL,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- One row per channel. NULL techdomme_enabled = inherit user default;
+-- non-NULL = explicit override.
+CREATE TABLE IF NOT EXISTS channel_techdomme_overrides (
+  channel_id TEXT NOT NULL PRIMARY KEY,
+  techdomme_enabled INTEGER NULL CHECK (techdomme_enabled IS NULL OR techdomme_enabled IN (0, 1)),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
 
 -- Append-only audit log. One row per session start.
-CREATE TABLE techdomme_mode_activations (
-  id                BIGSERIAL PRIMARY KEY,
-  user_id           TEXT NOT NULL,
-  channel_id        TEXT NOT NULL,
-  session_id        TEXT NOT NULL,
-  mode_source       TEXT NOT NULL CHECK (mode_source IN ('user', 'channel', 'off')),
-  reason            TEXT NULL,
+CREATE TABLE IF NOT EXISTS techdomme_mode_activations (
+  id INTEGER NOT NULL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  mode_source TEXT NOT NULL CHECK (mode_source IN ('user', 'channel', 'off')),
+  reason TEXT NULL,
   extension_version TEXT NULL,
-  activated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+  activated_at_ms INTEGER NOT NULL
+) STRICT;
 
-CREATE INDEX techdomme_mode_activations_user_idx ON techdomme_mode_activations (user_id, activated_at DESC);
-CREATE INDEX techdomme_mode_activations_session_idx ON techdomme_mode_activations (session_id);
+CREATE INDEX IF NOT EXISTS idx_techdomme_mode_activations_user
+  ON techdomme_mode_activations (user_id, activated_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_techdomme_mode_activations_session
+  ON techdomme_mode_activations (session_id);
 ```
+
+**Provider access (Kysely via `node:sqlite`):** the activation provider is `KyselyTechdommeActivationProvider` and uses the raw `DatabaseSync` handle to issue prepared statements. Once the v17 Kysely type is regenerated (the existing build flow does this from the SQL file), the prepared statements become typed `db.selectFrom(...).executeTakeFirst()` calls. The implementation already in `src/gateway/techdomme/provider.ts` works today and the type regen is a follow-up.
 
 **Activation flow (per session start):**
 
