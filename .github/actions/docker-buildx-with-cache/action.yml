@@ -65,3 +65,35 @@ runs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Docker buildx build with cache
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        CONTEXT: ${{ inputs.context }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        CACHE_REF: ${{ steps.cache-ref.outputs.cache-ref }}
+        PUSH_CACHE: ${{ steps.cache-ref.outputs.push-cache }}
+        TARGET: ${{ inputs.target }}
+        BUILD_ARGS: ${{ inputs.build-args }}
+      run: |
+        set -euo pipefail
+        cache_from_flags=(--cache-from "type=registry,ref=${CACHE_REF},mode=max")
+        cache_to_flags=()
+        if [ "${PUSH_CACHE}" = "true" ]; then
+          cache_to_flags=(--cache-to "type=registry,ref=${CACHE_REF},mode=max")
+        fi
+        target_flags=()
+        if [ -n "${TARGET}" ]; then
+          target_flags=(--target "${TARGET}")
+        fi
+        # shellcheck disable=SC2206  # word splitting is intentional for BUILD_ARGS lines
+        build_arg_flags=(${BUILD_ARGS})
+        docker buildx build \
+          --tag "${IMAGE}" \
+          --file "${CONTEXT}/${DOCKERFILE}" \
+          "${target_flags[@]}" \
+          "${build_arg_flags[@]}" \
+          "${cache_from_flags[@]}" \
+          "${cache_to_flags[@]}" \
+          --load \
+          "${CONTEXT}"
