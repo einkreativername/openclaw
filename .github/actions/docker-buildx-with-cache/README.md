@@ -16,6 +16,7 @@ every Docker build job.
 | `target` | no | — | Optional `--target` stage. |
 | `progress` | no | `auto` | docker buildx `--progress` flag (`auto`, `plain`, `tty`, etc.). |
 | `build-args` | no | — | Extra `--build-arg` flags, one per line. |
+| `extra-tags` | no | — | Extra image tags to apply after the build, one per line. |
 
 ## Outputs
 

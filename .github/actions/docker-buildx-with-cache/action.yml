@@ -35,6 +35,10 @@ inputs:
     description: Extra --build-arg flags, one per line.
     required: false
     default: ""
+  extra-tags:
+    description: Extra image tags to apply after the build, one per line.
+    required: false
+    default: ""
 outputs:
   image:
     description: Echoes back the input image:tag.
@@ -108,3 +112,16 @@ runs:
           "${cache_to_flags[@]}" \
           --load \
           "${CONTEXT}"
+    - name: Apply extra image tags
+      if: inputs.extra-tags != ''
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        EXTRA_TAGS: ${{ inputs.extra-tags }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r tag; do
+          [ -z "${tag}" ] && continue
+          echo "Tagging ${IMAGE} as ${tag}"
+          docker tag "${IMAGE}" "${tag}"
+        done <<< "${EXTRA_TAGS}"
