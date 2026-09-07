@@ -58,3 +58,10 @@ runs:
         echo "cache-ref=${cache_ref}" >> "${GITHUB_OUTPUT}"
         echo "push-cache=${push_cache}" >> "${GITHUB_OUTPUT}"
         echo "Resolved cache-ref=${cache_ref} push-cache=${push_cache}"
+    - name: Login to GHCR (push-cache only)
+      if: steps.cache-ref.outputs.push-cache == 'true'
+      uses: docker/login-action@5b192a474c5d4dbfb38d504a7c4b1f5b8e7b7b5d # v3.3.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
