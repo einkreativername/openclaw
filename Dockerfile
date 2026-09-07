@@ -89,13 +89,12 @@ COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-sele
 COPY --from=workspace-deps /out/openclaw-required-platform-packages /tmp/openclaw-required-platform-packages
 
 # ── Production dependencies ────────────────────────────────────
-FROM dependency-inputs AS production-deps
-RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod \
-      --config.supportedArchitectures.os=linux \
-      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc
-RUN sh scripts/docker/verify-native-addons.sh
+# Inherit the full install from the build stage and prune devDependencies
+# instead of running a second `pnpm install --prod` over the same lockfile.
+# The native-addons verification already ran in the build stage against the
+# full install; the runtime tree is the same shape as the previous --prod run.
+FROM build AS production-deps
+RUN pnpm_config_verify_deps_before_run=false pnpm prune --prod
 
 # ── Build ──────────────────────────────────────────────────────
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
