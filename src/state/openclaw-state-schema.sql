@@ -2577,3 +2577,48 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
   ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;
+
+-- Techdomme gateway-skin (Spec 0, 2026-09-07). All three tables are purely
+-- additive; the gateway-skin feature is opt-in per user, so we never write to
+-- these on a session that has not opted in.
+--
+-- user_techdomme_prefs: one row per user. Created on first toggle, never
+-- deleted. locale is informational and used by the persona overlay to
+-- select the right .md file.
+CREATE TABLE IF NOT EXISTS user_techdomme_prefs (
+  user_id TEXT NOT NULL PRIMARY KEY,
+  techdomme_enabled INTEGER NOT NULL DEFAULT 0 CHECK (techdomme_enabled IN (0, 1)),
+  locale TEXT NOT NULL DEFAULT 'en',
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+-- channel_techdomme_overrides: one row per channel. NULL techdomme_enabled
+-- means "inherit user default"; non-NULL means explicit override. This is
+-- the per-channel-override portion of the hybrid activation scope.
+CREATE TABLE IF NOT EXISTS channel_techdomme_overrides (
+  channel_id TEXT NOT NULL PRIMARY KEY,
+  techdomme_enabled INTEGER NULL CHECK (techdomme_enabled IS NULL OR techdomme_enabled IN (0, 1)),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+-- techdomme_mode_activations: append-only audit log. One row per session
+-- start, regardless of whether techdomme was active. mode_source records
+-- which table the value came from ('user', 'channel', 'off'). reason is
+-- for non-active rows (e.g. 'activation_error' when the provider threw).
+CREATE TABLE IF NOT EXISTS techdomme_mode_activations (
+  id INTEGER NOT NULL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  mode_source TEXT NOT NULL CHECK (mode_source IN ('user', 'channel', 'off')),
+  reason TEXT NULL,
+  extension_version TEXT NULL,
+  activated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_techdomme_mode_activations_user
+  ON techdomme_mode_activations (user_id, activated_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_techdomme_mode_activations_session
+  ON techdomme_mode_activations (session_id);
