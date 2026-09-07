@@ -463,3 +463,36 @@ export function parseRawSessionConversationRef(
 
   return { channel, kind, rawId, prefix };
 }
+
+/**
+ * Extract the techdomme channelId from an openclaw session key.
+ *
+ * Returns the first segment of the agent-scoped rest (e.g. "discord",
+ * "telegram", "matrix") for agent-shaped keys. Returns null for the main
+ * session (`"main"`) and for keys that do not parse as agent-shaped
+ * keys (cron, acp, subagent scopes).
+ *
+ * This is a deliberately narrow helper for the techdomme gateway-skin
+ * activation resolver. It is NOT a general-purpose channel-id parser;
+ * for the full conversation reference use `parseAgentSessionKey` or
+ * `parseSessionConversationRef` and the existing peer-id machinery.
+ */
+export function parseTechdommeChannelIdFromSessionKey(
+  sessionKey: string | undefined | null,
+): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const firstSegment = parsed.rest.split(":", 1)[0];
+  if (!firstSegment) {
+    return null;
+  }
+  // The main agent's per-agent scope ("main") is not a real channel.
+  // Cron / acp / subagent scopes start with their own prefix; the
+  // techdomme feature is not gated on those for Spec 0.
+  if (firstSegment === "main" || firstSegment === "cron" || firstSegment === "acp" || firstSegment === "subagent") {
+    return null;
+  }
+  return firstSegment;
+}

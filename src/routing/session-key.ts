@@ -14,6 +14,7 @@ import {
   normalizeSessionPeerId,
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
+  parseTechdommeChannelIdFromSessionKey,
 } from "../sessions/session-key-utils.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { normalizeAccountId } from "./account-id.js";
@@ -24,6 +25,7 @@ export {
   isSubagentSessionKey,
   parseAgentSessionKey,
   parseSessionDeliveryRoute,
+  parseTechdommeChannelIdFromSessionKey,
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
