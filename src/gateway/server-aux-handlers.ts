@@ -28,6 +28,8 @@ import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-to
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
 import { createApprovalWebPushDelivery } from "./approval-web-push.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { getTechdommeSingletons } from "./techdomme/gateway-singleton.js";
+import { techdommeAuxHandlers } from "./techdomme/gateway-handlers.js";
 import {
   createExecApprovalIosPushDelivery,
   createPluginApprovalIosPushDelivery,
@@ -496,6 +498,24 @@ export function createGatewayAuxHandlers(
       "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
       "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
       "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
+      // Techdomme gateway-skin (Spec 0). Reads the boot-populated
+      // singletons once and wraps the handler map. The singletons are
+      // initialised by initTechdommeSingletons() at gateway boot, called
+      // from the same place that opens the openclaw shared state db.
+      "techdomme.setUserPref": createLazyHandler(
+        "techdomme.setUserPref",
+        async () => {
+          const { provider, resolver } = getTechdommeSingletons();
+          return techdommeAuxHandlers(provider, resolver);
+        },
+      ),
+      "techdomme.setChannelOverride": createLazyHandler(
+        "techdomme.setChannelOverride",
+        async () => {
+          const { provider, resolver } = getTechdommeSingletons();
+          return techdommeAuxHandlers(provider, resolver);
+        },
+      ),
     },
   };
 }
