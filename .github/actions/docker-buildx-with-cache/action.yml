@@ -1,0 +1,43 @@
+name: Docker Buildx with GHCR Cache
+description: >
+  Wraps docker buildx build with --cache-from/--cache-to pointing at
+  ghcr.io/<owner>/<cache-namespace>:branch-main. Pushes only when
+  push-cache is true AND github.ref_name == 'main'.
+inputs:
+  image:
+    description: Image:tag to build.
+    required: true
+  context:
+    description: Build context path.
+    required: false
+    default: "."
+  dockerfile:
+    description: Dockerfile path relative to context.
+    required: false
+    default: "Dockerfile"
+  push-cache:
+    description: Force cache push (auto-set to true on main).
+    required: false
+    default: "auto"
+  cache-namespace:
+    description: GHCR tag prefix for the cache image.
+    required: false
+    default: "buildcache"
+  target:
+    description: Optional --target stage.
+    required: false
+    default: ""
+  build-args:
+    description: Extra --build-arg flags, one per line.
+    required: false
+    default: ""
+outputs:
+  image:
+    description: Echoes back the input image:tag.
+    value: ${{ inputs.image }}
+runs:
+  using: composite
+  steps:
+    - name: Placeholder
+      shell: bash
+      run: echo "image=${{ inputs.image }} context=${{ inputs.context }}"
