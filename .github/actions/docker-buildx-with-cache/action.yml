@@ -38,6 +38,23 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Placeholder
+    - name: Resolve cache reference and push policy
+      id: cache-ref
       shell: bash
-      run: echo "image=${{ inputs.image }} context=${{ inputs.context }}"
+      env:
+        CACHE_NAMESPACE: ${{ inputs.cache-namespace }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        REF_NAME: ${{ github.ref_name }}
+        PUSH_CACHE_INPUT: ${{ inputs.push-cache }}
+      run: |
+        set -euo pipefail
+        cache_ref="ghcr.io/${REPO_OWNER}/${CACHE_NAMESPACE}:branch-main"
+        # Restore from branch-main even on PRs; only push on main.
+        if [ "${PUSH_CACHE_INPUT}" = "true" ] || { [ "${PUSH_CACHE_INPUT}" = "auto" ] && [ "${REF_NAME}" = "main" ]; }; then
+          push_cache="true"
+        else
+          push_cache="false"
+        fi
+        echo "cache-ref=${cache_ref}" >> "${GITHUB_OUTPUT}"
+        echo "push-cache=${push_cache}" >> "${GITHUB_OUTPUT}"
+        echo "Resolved cache-ref=${cache_ref} push-cache=${push_cache}"
