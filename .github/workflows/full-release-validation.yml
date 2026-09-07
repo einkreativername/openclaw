@@ -735,15 +735,15 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify Docker runtime-assets prune path
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: |
-          set -euo pipefail
-          timeout --kill-after=30s 15m docker build \
-            --target runtime-assets \
-            --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
-            .
+      - name: Verify Docker runtime-assets prune path (with GHCR cache)
+        uses: ./.github/actions/docker-buildx-with-cache
+        with:
+          image: openclaw-runtime-assets-verify:local
+          context: .
+          dockerfile: Dockerfile
+          target: runtime-assets
+          build-args: |
+            --build-arg OPENCLAW_EXTENSIONS=diagnostics-otel,codex
 
   normal_ci:
     name: Run normal full CI
