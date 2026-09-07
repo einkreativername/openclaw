@@ -46,18 +46,22 @@ export function initTechdommeSingletons(): TechdommeSingletons {
 }
 
 /**
- * Read the boot-populated techdomme singletons. Throws if the gateway
- * has not called initTechdommeSingletons yet. Call sites that may fire
- * before boot (e.g. background tasks) should wrap in try/catch and
- * skip the techdomme wiring.
+ * Read the boot-populated techdomme singletons. Lazy-initializes on
+ * first access: the first call opens the shared openclaw state
+ * database (via the process-level singleton in
+ * src/state/openclaw-state-db.ts) and wires the activation provider +
+ * resolver. Subsequent calls return the cached pair.
+ *
+ * This means the openclaw server does not need an explicit
+ * "initTechdommeSingletons" call at boot — the first session-create
+ * or first aux RPC triggers the lazy init. Callers that want to
+ * warm the singletons at boot can still call `initTechdommeSingletons`
+ * explicitly; that function is now a no-op alias for
+ * `getTechdommeSingletons` to keep the boot-friendly name in scope.
  */
 export function getTechdommeSingletons(): TechdommeSingletons {
   if (!cachedSingletons) {
-    throw new Error(
-      "getTechdommeSingletons: techdomme singletons not initialized. " +
-        "Call initTechdommeSingletons() during gateway boot, before any " +
-        "session-create or aux RPC fires.",
-    );
+    return initTechdommeSingletons();
   }
   return cachedSingletons;
 }
