@@ -26,7 +26,6 @@ import {
   type TechdommeSessionContext,
 } from "./middleware.js";
 import {
-  KyselyTechdommeActivationProvider,
   InMemoryTechdommeActivationProvider,
   type TechdommeActivationProvider,
 } from "./provider.js";
@@ -85,8 +84,20 @@ function buildAttachableSession(input: OpenClawTechdommeWireInput): TechdommeAtt
 export async function wireTechdommeIntoSessionCreate(
   input: OpenClawTechdommeWireInput,
 ): Promise<TechdommeSessionContext> {
-  const provider =
-    input.provider ?? new KyselyTechdommeActivationProvider(/* DatabaseSync slot — populated by the gateway at boot. */ undefined as never);
+  if (!input.provider) {
+    // Wire-in sites must construct or look up a provider at boot. The
+    // recommended pattern is `createTechdommeSingletons(db)` once in the
+    // gateway boot and pass the returned provider here. We do not
+    // silently fall back to a no-op in-memory provider because that
+    // would make the techdomme state invisible to the rest of the
+    // gateway and produce surprising results on a production deploy.
+    throw new Error(
+      "wireTechdommeIntoSessionCreate: input.provider is required. " +
+        "Construct one via createTechdommeSingletons(openclawStateDb) at " +
+        "gateway boot and pass the returned provider in.",
+    );
+  }
+  const provider = input.provider;
   const resolver = new TechdommeActivationResolver(
     provider,
     (input.session.channelId ? inferLocaleFromChannel(input.session.channelId) : "en"),
