@@ -345,18 +345,15 @@ jobs:
         with:
           cache-key: Dockerfile
 
-      - name: Build local root Dockerfile smoke image
-        env:
-          CANDIDATE_DIR: ${{ runner.temp }}/root-dockerfile-candidate
-          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
-        run: |
-          timeout --kill-after=30s 45m docker buildx build \
-            --progress=plain \
-            --load \
-            --build-arg OPENCLAW_EXTENSIONS=matrix \
-            -t "$IMAGE_REF" \
-            -f "$CANDIDATE_DIR/Dockerfile" \
-            "$CANDIDATE_DIR"
+      - name: Build local root Dockerfile smoke image (with GHCR cache)
+        uses: ./.github/actions/docker-buildx-with-cache
+        with:
+          image: ${{ needs.preflight.outputs.dockerfile_image }}
+          context: ${{ runner.temp }}/root-dockerfile-candidate
+          dockerfile: Dockerfile
+          progress: plain
+          build-args: |
+            --build-arg OPENCLAW_EXTENSIONS=matrix
 
       - name: Pack root Dockerfile image artifact
         id: image_artifact
@@ -664,14 +661,13 @@ jobs:
         with:
           cache-key: scripts/docker/install-sh-smoke/Dockerfile
 
-      - name: Build pinned candidate packaging harness
-        run: |
-          timeout --kill-after=30s 20m docker buildx build \
-            --progress=plain \
-            --load \
-            -t openclaw-install-candidate-packager:local \
-            -f ./.release-harness/scripts/docker/install-sh-smoke/Dockerfile \
-            ./.release-harness/scripts/docker
+      - name: Build pinned candidate packaging harness (with GHCR cache)
+        uses: ./.github/actions/docker-buildx-with-cache
+        with:
+          image: openclaw-install-candidate-packager:local
+          context: ./.release-harness/scripts/docker
+          dockerfile: install-sh-smoke/Dockerfile
+          progress: plain
 
       - name: Package candidate only inside pinned harness
         env:
@@ -813,16 +809,13 @@ jobs:
         with:
           cache-key: scripts/docker/install-sh-smoke/Dockerfile
 
-      - name: Build installer smoke image
-        env:
-          IMAGE_REF: openclaw-install-smoke:local
-        run: |
-          timeout --kill-after=30s 20m docker buildx build \
-            --progress=plain \
-            --load \
-            -t "$IMAGE_REF" \
-            -f ./.release-harness/scripts/docker/install-sh-smoke/Dockerfile \
-            ./.release-harness/scripts/docker
+      - name: Build installer smoke image (with GHCR cache)
+        uses: ./.github/actions/docker-buildx-with-cache
+        with:
+          image: openclaw-install-smoke:local
+          context: ./.release-harness/scripts/docker
+          dockerfile: install-sh-smoke/Dockerfile
+          progress: plain
 
       - name: Pack installer smoke image artifact
         id: image_artifact
@@ -886,16 +879,13 @@ jobs:
         with:
           cache-key: scripts/docker/install-sh-nonroot/Dockerfile
 
-      - name: Build installer non-root image
-        env:
-          IMAGE_REF: openclaw-install-nonroot:local
-        run: |
-          timeout --kill-after=30s 20m docker buildx build \
-            --progress=plain \
-            --load \
-            -t "$IMAGE_REF" \
-            -f ./.release-harness/scripts/docker/install-sh-nonroot/Dockerfile \
-            ./.release-harness/scripts/docker
+      - name: Build installer non-root image (with GHCR cache)
+        uses: ./.github/actions/docker-buildx-with-cache
+        with:
+          image: openclaw-install-nonroot:local
+          context: ./.release-harness/scripts/docker
+          dockerfile: install-sh-nonroot/Dockerfile
+          progress: plain
 
       - name: Pack installer non-root image artifact
         id: image_artifact
