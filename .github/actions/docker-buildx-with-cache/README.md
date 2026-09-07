@@ -14,6 +14,7 @@ every Docker build job.
 | `push-cache` | no | `auto` | `auto` pushes only on `main`; `true` forces; `false` never. |
 | `cache-namespace` | no | `buildcache` | GHCR tag prefix for the cache image. |
 | `target` | no | — | Optional `--target` stage. |
+| `progress` | no | `auto` | docker buildx `--progress` flag (`auto`, `plain`, `tty`, etc.). |
 | `build-args` | no | — | Extra `--build-arg` flags, one per line. |
 
 ## Outputs
@@ -29,6 +30,7 @@ every Docker build job.
 - uses: ./.github/actions/docker-buildx-with-cache
   with:
     image: openclaw:test
+    progress: plain
     build-args: |
       --build-arg OPENCLAW_EXTENSIONS=matrix
       --build-arg OPENCLAW_DOCKER_BUILD_SKIP_DTS=1

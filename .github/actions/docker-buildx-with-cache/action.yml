@@ -27,6 +27,10 @@ inputs:
     description: Optional --target stage.
     required: false
     default: ""
+  progress:
+    description: docker buildx --progress flag (auto, plain, tty, etc.).
+    required: false
+    default: "auto"
   build-args:
     description: Extra --build-arg flags, one per line.
     required: false
@@ -74,6 +78,7 @@ runs:
         CACHE_REF: ${{ steps.cache-ref.outputs.cache-ref }}
         PUSH_CACHE: ${{ steps.cache-ref.outputs.push-cache }}
         TARGET: ${{ inputs.target }}
+        PROGRESS: ${{ inputs.progress }}
         BUILD_ARGS: ${{ inputs.build-args }}
       run: |
         set -euo pipefail
@@ -86,11 +91,17 @@ runs:
         if [ -n "${TARGET}" ]; then
           target_flags=(--target "${TARGET}")
         fi
-        # shellcheck disable=SC2206  # word splitting is intentional for BUILD_ARGS lines
-        build_arg_flags=(${BUILD_ARGS})
+        # Each line of BUILD_ARGS is one complete --build-arg flag with its value.
+        # Read line by line so values containing '=' are preserved as a single arg.
+        build_arg_flags=()
+        while IFS= read -r line; do
+          [ -z "${line}" ] && continue
+          build_arg_flags+=("${line}")
+        done <<< "${BUILD_ARGS}"
         docker buildx build \
           --tag "${IMAGE}" \
           --file "${CONTEXT}/${DOCKERFILE}" \
+          --progress "${PROGRESS}" \
           "${target_flags[@]}" \
           "${build_arg_flags[@]}" \
           "${cache_from_flags[@]}" \
