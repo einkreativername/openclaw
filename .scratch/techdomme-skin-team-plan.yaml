@@ -1,0 +1,412 @@
+version: 1
+plan:
+  name: 'Techdomme Gateway-Skin (Spec 0) implementieren'
+  max_concurrency: 4
+  max_consecutive_failures: 2
+  max_cycles: 6
+  auto_reject_retries: 1
+  verifier_config:
+    default_verifiers: [verifier]
+    audit_sample_rate: 0.0
+tasks:
+  - id: schema-and-activation
+    title: 'Foundation: Drizzle-Schema + Activation-Provider + Resolver'
+    prompt: |
+      Implement the data-contract foundation for the techdomme gateway-skin.
+
+      Working directory: /Users/sk/Projects/openclaw-docker
+      Branch: feature/techdomme-gateway-skin (already checked out)
+      Spec: docs/superpowers/specs/2026-09-07-techdomme-gateway-skin-design.md (§0.1, §0.2, §0.4)
+      No pnpm or node available on this host — write code, do static review only.
+
+      Read first (mandatory, in this order):
+      1. The spec doc above
+      2. src/gateway/db/schema.ts — existing Drizzle table patterns
+      3. src/gateway/migrations/ — existing migration naming + format
+      4. pnpm-workspace.yaml — to confirm the pnpm catalog/version pins
+      5. .agents/skills/openclaw-live-updater/agents or similar — to learn
+         the existing openclaw patterns for Drizzle migration authors
+
+      Deliver (commit on the same branch):
+      - src/gateway/migrations/<timestamp>_techdomme.sql with the three tables
+        (user_techdomme_prefs, channel_techdomme_overrides, techdomme_mode_activations)
+        and the two indexes. Use snake_case column names, timestamptz, ON DELETE CASCADE.
+      - src/gateway/techdomme/provider.ts: TechdommeActivationProvider interface
+        + DrizzleActivationProvider implementation that reads the two tables.
+        Methods: getUserPref(userId), getChannelOverride(channelId),
+        setUserPref(userId, enabled, locale?), setChannelOverride(channelId, enabled|null).
+      - src/gateway/techdomme/activation.ts: pure resolve(userId, channelId, provider)
+        that returns TechdommeMode. In-process LRU cache with 60s TTL
+        keyed by (userId, channelId). Fail-closed on provider errors.
+      - src/gateway/techdomme/activation.test.ts: vitest tests for the 4
+        combinations (no user row / no channel row / user-set / channel-override-set)
+        + the cache hit/miss paths + the error fallback path.
+      - src/gateway/techdomme/provider.test.ts: integration tests for the
+        Drizzle provider against an in-memory SQLite (use better-sqlite3
+        if it's already a devDep, otherwise mock the Drizzle client).
+
+      Acceptance:
+      - File paths match the spec exactly.
+      - Migration SQL is idempotent (CREATE TABLE IF NOT EXISTS) and uses
+        the existing openclaw naming pattern (look at sibling migrations).
+      - resolve() never throws; on provider error returns
+        { active: false, source: 'off', reason: 'activation_error' }.
+      - Tests pass when run via `pnpm vitest run src/gateway/techdomme/`
+        (you cannot run this — write the tests so they would pass).
+      - Typecheck clean: matches the surrounding code's strict TypeScript style.
+      - Single commit, conventional commit message
+        ("feat(gateway): techdomme activation schema + provider + resolver").
+
+      Stop condition: report changed files, the exact commit hash, and the
+      static-review checklist (file-by-file, what you verified by reading).
+    assigned_to: coder
+    verified_by: verifier
+    verify_prompt: |
+      Independently verify the schema-and-activation deliverable.
+
+      Re-derive the file list from the spec (§0.2 data model + §0.1 component list).
+      For each file:
+      - File exists at the exact path the spec mandates.
+      - File is committed (git log --stat shows it on feature/techdomme-gateway-skin).
+      - Code matches the spec's contract: provider interface, resolver cache TTL
+        (60s), fail-closed behavior on error, the 4 activation combinations.
+
+      Independent checks:
+      - Read src/gateway/techdomme/activation.ts and confirm the cache key
+        is (userId, channelId) and the TTL is exactly 60_000 ms or equivalent.
+      - Read the migration SQL and confirm all 3 tables + 2 indexes are present
+        with the exact column names and types from the spec.
+      - Run: `git log --oneline feature/techdomme-gateway-skin` and confirm a
+        single conventional-commit commit is present for this task.
+      - Run: `git show --stat <commit-hash>` and confirm only the expected
+        files are touched (no collateral changes).
+      - Read each .test.ts file and confirm it covers at least: 4
+        combinations, cache hit/miss, error fallback.
+
+      VERDICT: PASS only if every file is present, every spec-mandated
+      behavior is in the code, the commit is clean, and tests are
+      well-formed. Otherwise FAIL with the specific gap.
+    max_retries: 2
+
+  - id: extension-foundation
+    title: 'Extension: Manifest + Entry-Point + Persona + Placeholder-Skill'
+    prompt: |
+      Implement the extension foundation for the techdomme gateway-skin.
+      This is independent of the gateway-core activation code; it only
+      needs the data-model contract from the spec.
+
+      Working directory: /Users/sk/Projects/openclaw-docker
+      Branch: feature/techdomme-gateway-skin
+      Spec: docs/superpowers/specs/2026-09-07-techdomme-gateway-skin-design.md (§0.1, §0.3)
+      No pnpm or node available — write code, do static review only.
+
+      Read first:
+      1. The spec doc
+      2. extensions/codex/manifest.yml (or another existing extension) —
+         the manifest schema + entry-point shape + the openclaw extension
+         loader contract
+      3. extensions/codex/src/index.ts — to learn the entry-point export shape
+      4. .agents/skills/openclaw-live-updater or openclaw-pr-maintainer —
+         for any extension-author guidance the project ships
+
+      Deliver (commit on the same branch):
+      - extensions/techdomme/manifest.yml: declares the extension, version
+        0.1.0, lists no skills in the manifest (skills are file-discovered
+        by the extension entry point).
+      - extensions/techdomme/src/index.ts: extension entry point. Exports
+        a default function that receives the openclaw extension context
+        (read it from a sibling extension to confirm shape). The function:
+        (a) reads TechdommeSessionContext from the context; (b) if active,
+          calls registerPersonaOverlay(ctx) and registerTechdommeSkills(registry, ctx);
+        (c) if not active, no-op; (d) returns a cleanup function.
+      - extensions/techdomme/src/persona/apply.ts: applyToSystemPrompt(basePrompt, ctx)
+        that loads <locale>.md, falls back to en.md, wraps in a labeled
+        XML block, prepends to basePrompt.
+      - extensions/techdomme/src/persona/en.md: short placeholder persona
+        text in English (3-5 lines, tone: neutral + professional, no
+        FemDom-coded content yet — that's a follow-on skill spec).
+      - extensions/techdomme/src/persona/de.md: same content in German.
+      - extensions/techdomme/src/skills/index.ts: registerTechdommeSkills(registry, ctx)
+        that iterates over the skill files in src/skills/, validates no
+        duplicate names, registers each with the openclaw skill registry.
+      - extensions/techdomme/src/skills/placeholder-mode-info.ts: the single
+        placeholder skill. Returns a status object describing the active
+        session (user, channel, mode source, locale, extension version).
+        Schema: { name: 'techdomme-mode-info', description, appliesWhen, run }.
+      - extensions/techdomme/src/persona/apply.test.ts: vitest tests for
+        locale resolution (en/de/missing → en fallback), XML block wrapping,
+        prepend-to-empty-base case.
+
+      Acceptance:
+      - Manifest and entry point match the existing extension patterns
+        (compare to extensions/codex/manifest.yml + index.ts).
+      - applyToSystemPrompt handles the empty-base case (no agent prompt).
+      - registerTechdommeSkills errors on duplicate skill names.
+      - No new npm dependencies added (use what's already in the workspace).
+      - Typecheck clean.
+      - Single commit, conventional commit message
+        ("feat(extension/techdomme): scaffold extension + persona + placeholder skill").
+
+      Stop condition: report changed files, commit hash, and a manifest diff
+      vs extensions/codex/manifest.yml (to confirm the schema is right).
+    assigned_to: coder
+    depends_on: [schema-and-activation]
+    verified_by: verifier
+    verify_prompt: |
+      Independently verify the extension-foundation deliverable.
+
+      Independent checks:
+      - extensions/techdomme/ exists with the file tree the spec mandates.
+      - manifest.yml parses as YAML and has the same top-level keys as
+        extensions/codex/manifest.yml (use `diff <(yq -P extensions/codex/manifest.yml) <(yq -P extensions/techdomme/manifest.yml)` style; or read both).
+      - extensions/techdomme/src/index.ts exports a default function and
+        calls registerPersonaOverlay + registerTechdommeSkills only when
+        ctx.techdomme?.active is true.
+      - apply.test.ts covers: locale match, locale fallback, empty base prompt.
+      - The placeholder skill is registered but does NOT contain FemDom-coded
+        content (verify by grep — no German FemDom keywords, no English
+        FemDom keywords in the persona .md files).
+      - Run: `git log --oneline feature/techdomme-gateway-skin` and confirm a
+        single new commit is present for this task.
+      - Run: `git show --stat <commit-hash>` and confirm only expected files.
+
+      VERDICT: PASS only if every file is present, the contract matches
+      the spec, no FemDom content leaks into the placeholder, and the
+      commit is clean. Otherwise FAIL with the specific gap.
+    max_retries: 2
+
+  - id: middleware
+    title: 'Gateway-Middleware: Session-Context-Anbindung'
+    prompt: |
+      Wire the activation resolver into the gateway session lifecycle.
+
+      Working directory: /Users/sk/Projects/openclaw-docker
+      Branch: feature/techdomme-gateway-skin
+      Spec: docs/superpowers/specs/2026-09-07-techdomme-gateway-skin-design.md (§0.1, §0.2)
+      Depends on: schema-and-activation (the provider and resolver exist).
+
+      Read first:
+      1. The spec doc
+      2. src/gateway/middleware/index.ts — the existing middleware registry
+      3. src/gateway/session.ts (or wherever sessions are constructed) —
+         the session object shape, where to attach TechdommeSessionContext
+      4. src/gateway/techdomme/activation.ts — to confirm the resolver signature
+      5. .agents/skills/openclaw-live-updater or openclaw-pr-maintainer —
+         for the existing middleware-pattern guidance
+
+      Deliver (commit on the same branch):
+      - src/gateway/techdomme/middleware.ts: techdommeSessionMiddleware that
+        fires before any agent dispatch. Reads (userId, channelId) from
+        the incoming session-start event, calls activation.resolve,
+        attaches a TechdommeSessionContext to the session object, writes
+        one row to techdomme_mode_activations.
+      - src/gateway/middleware/index.ts: register the new middleware at
+        the right point in the existing chain (after auth, before agent
+        dispatch — confirm the exact position by reading the index.ts).
+      - src/gateway/techdomme/middleware.test.ts: vitest tests for the
+        end-to-end session-start path using an in-memory Drizzle mock.
+
+      Acceptance:
+      - Middleware reads from the activation provider (injected, not global).
+      - On provider error, the middleware still allows the session to start
+        (fail-closed for techdomme, but don't break the gateway).
+      - The audit-log write is best-effort: errors are logged but don't
+        block session start.
+      - Single commit, conventional commit message
+        ("feat(gateway): wire techdomme activation into session middleware").
+
+      Stop condition: report changed files, commit hash, and which
+      middleware-position the new middleware was inserted at.
+    assigned_to: coder
+    depends_on: [schema-and-activation]
+    verified_by: verifier
+    verify_prompt: |
+      Verify the middleware deliverable.
+
+      Independent checks:
+      - src/gateway/techdomme/middleware.ts exists and exports a function
+        with a clear name (e.g. techdommeSessionMiddleware).
+      - It calls activation.resolve() (NOT direct DB access — must use the
+        abstraction from the schema-and-activation task).
+      - It attaches a TechdommeSessionContext to the session object before
+        returning.
+      - It writes one audit-log row per session start, with all the
+        required fields.
+      - src/gateway/middleware/index.ts registers the new middleware in
+        the correct position in the chain.
+      - middleware.test.ts has at least: happy path, provider-error path,
+        audit-log-write-fails path.
+      - The commit on feature/techdomme-gateway-skin is conventional and
+        touches only the expected files.
+
+      VERDICT: PASS only if every contract is met. Otherwise FAIL.
+    max_retries: 2
+
+  - id: admin-rpc
+    title: 'Admin-RPC: User-Pref + Channel-Override Endpoints'
+    prompt: |
+      Implement the admin HTTP RPC for toggling techdomme preferences.
+
+      Working directory: /Users/sk/Projects/openclaw-docker
+      Branch: feature/techdomme-gateway-skin
+      Spec: docs/superpowers/specs/2026-09-07-techdomme-gateway-skin-design.md (§0.1)
+      Depends on: schema-and-activation (the provider methods exist).
+
+      Read first:
+      1. The spec doc
+      2. The existing admin HTTP RPC pattern — look for files like
+         src/gateway/admin/rpc/*.ts or wherever the existing admin
+         endpoints live. Use the same shape, error model, and auth model.
+      3. src/gateway/techdomme/provider.ts — confirm the setUserPref and
+        setChannelOverride method signatures.
+
+      Deliver (commit on the same branch):
+      - src/gateway/techdomme/rpc.ts: two RPC handlers:
+        techdomme.setUserPref({ userId, enabled, locale? }) → updates
+        user_techdomme_prefs, invalidates the user cache.
+        techdomme.setChannelOverride({ channelId, enabled|null }) → updates
+        channel_techdomme_overrides, invalidates the channel cache.
+        Both return the updated row. Use the same error model as sibling
+        RPC handlers.
+      - Register the handlers at the right spot in the existing RPC router.
+      - src/gateway/techdomme/rpc.test.ts: vitest tests for both endpoints
+        (happy path, idempotent re-toggles, cache invalidation).
+
+      Acceptance:
+      - Endpoints match the existing admin RPC style (request shape, error shape).
+      - Cache invalidation actually fires on write (not just a code path —
+        a real call to the provider's invalidate method).
+      - Auth model matches sibling endpoints (don't introduce a new auth
+        requirement unless the spec mandates it).
+      - Single commit, conventional commit message
+        ("feat(gateway): admin RPC for techdomme prefs + overrides").
+
+      Stop condition: report changed files, commit hash, the request
+      and response shape for each endpoint, and the cache-invalidation
+      call site.
+    assigned_to: coder
+    depends_on: [schema-and-activation]
+    verified_by: verifier
+    verify_prompt: |
+      Verify the admin-rpc deliverable.
+
+      Independent checks:
+      - src/gateway/techdomme/rpc.ts exists and exports the two handlers
+        named in the prompt.
+      - Both handlers call the provider's setUserPref / setChannelOverride
+        (not direct DB access).
+      - Cache invalidation happens after a successful write.
+      - Error model matches sibling endpoints (read 1-2 existing admin
+        RPC files and compare the try/catch shape, the HTTP error codes
+        used, and the JSON error body shape).
+      - rpc.test.ts covers: happy path, idempotent re-toggle, cache
+        invalidation triggered.
+      - The commit is conventional and only touches expected files.
+
+      VERDICT: PASS only if every contract is met. Otherwise FAIL.
+    max_retries: 2
+
+  - id: integration-tests
+    title: 'Integration + E2E Test Suite'
+    prompt: |
+      Write the cross-component integration + extension E2E tests that
+      prove the skin works end-to-end.
+
+      Working directory: /Users/sk/Projects/openclaw-docker
+      Branch: feature/techdomme-gateway-skin
+      Spec: docs/superpowers/specs/2026-09-07-techdomme-gateway-skin-design.md (§0.4)
+      Depends on: schema-and-activation, extension-foundation, middleware,
+      admin-rpc.
+
+      Read first:
+      1. The spec doc §0.4 testing strategy
+      2. test/integration/ — pick a small existing integration test to
+         mirror the file shape and the in-memory DB pattern
+      3. extensions/canvas/test/ (or any other extension's test dir) —
+         to learn the E2E pattern for extensions
+      4. The four prior task deliverables (use git log + git show to
+         read what the prior workers committed).
+
+      Deliver (commit on the same branch):
+      - test/integration/techdomme/full-flow.test.ts: end-to-end test that
+        seeds the DB, fires a session-start event, asserts the audit-log
+        row is correct, asserts the session object has the right
+        TechdommeSessionContext, and exercises the admin RPC end-to-end.
+      - extensions/techdomme/test/e2e.test.ts: extension E2E test that
+        loads the extension in a test harness, sets up an active
+        TechdommeSessionContext, calls the entry point, asserts the
+        persona block is in the resulting system prompt and the
+        placeholder skill is callable.
+      - extensions/techdomme/test/extension-fail.test.ts: extension
+        E2E test that simulates a load failure (e.g., a missing
+        manifest key) and asserts the session continues with normal
+        mode + a warn log.
+
+      Acceptance:
+      - Tests use vitest (the project standard).
+      - Tests can run with `pnpm vitest run test/integration/techdomme/`
+        and `pnpm vitest run extensions/techdomme/test/`.
+      - The full-flow test exercises the channel-override-beats-user-default
+        case (acceptance criterion from §0.4).
+      - Single commit, conventional commit message
+        ("test(techdomme): integration + E2E test suite").
+
+      Stop condition: report changed files, commit hash, list of test
+      cases covered, and any gaps where you couldn't write a test due
+      to missing infrastructure.
+    assigned_to: tester
+    depends_on: [middleware, admin-rpc, extension-foundation]
+    verified_by: verifier
+    verify_prompt: |
+      Verify the test suite covers the §0.4 acceptance criteria.
+
+      Independent checks:
+      - test/integration/techdomme/full-flow.test.ts exists and covers:
+        (a) DB seed + session start, (b) audit-log row written, (c) channel
+        override beats user default, (d) admin RPC end-to-end.
+      - extensions/techdomme/test/e2e.test.ts exists and covers: persona
+        visible in prompt, placeholder skill callable.
+      - extensions/techdomme/test/extension-fail.test.ts exists and
+        covers: fail-load → session normal, warn logged.
+      - All three test files use vitest imports (not jest/mocha).
+      - The commit is conventional and only touches expected files.
+
+      Read each test and judge whether it would PASS if run against the
+      spec'd code (don't actually run — there is no pnpm locally).
+
+      VERDICT: PASS only if every acceptance criterion has a matching
+      test. Otherwise FAIL with the specific gap.
+    max_retries: 2
+
+  - id: final-gate
+    title: 'Final-Gate: Branch-State + Spec-Coverage Audit'
+    prompt: |
+      Independent final audit of the entire feature/techdomme-gateway-skin
+      branch against the spec.
+
+      Working directory: /Users/sk/Projects/openclaw-docker
+      Spec: docs/superpowers/specs/2026-09-07-techdomme-gateway-skin-design.md
+
+      Run these checks and report:
+      1. `git log --oneline main..feature/techdomme-gateway-skin` — every
+         commit must be a conventional commit with a sensible scope.
+      2. `git diff --stat main..feature/techdomme-gateway-skin` — every
+         file in the spec's "Files Touched in Spec 0" section must appear.
+         No collateral changes outside that list.
+      3. For each spec section (§0.1, §0.2, §0.3, §0.4), confirm the
+         relevant code is in the branch.
+      4. The migration file name matches the project convention.
+      5. The branch is a single coherent feature, not 6 unrelated commits.
+
+      Final report shape:
+      - PASS/FAIL per spec section
+      - List of any missing files
+      - List of any unexpected files
+      - Commit hygiene verdict
+      - Overall PASS or FAIL with one-line summary
+
+      Do NOT modify any files. Audit only.
+    role: verify-as-task
+    assigned_to: verifier
+    depends_on: [integration-tests]
+    max_retries: 1

@@ -1,0 +1,19 @@
+ARG BASE_IMAGE=ghcr.io/openclaw/openclaw:latest
+FROM ${BASE_IMAGE}
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential file qrencode ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /home/linuxbrew/.linuxbrew \
+    && chown -R node:node /home/linuxbrew
+
+USER node
+ENV HOMEBREW_NO_ANALYTICS=1 \
+    HOMEBREW_NO_AUTO_UPDATE=1 \
+    NONINTERACTIVE=1
+RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+USER node
+RUN npm install -g @xdevplatform/xurl
