@@ -15,5 +15,17 @@ ENV HOMEBREW_NO_ANALYTICS=1 \
 RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/node/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-USER node
+# Global npm installs need root: newer base-image releases lock down
+# /usr/local/lib/node_modules against the non-root node user.
+USER root
 RUN npm install -g @xdevplatform/xurl
+
+# tailscale CLI only (no tailscaled): talks to the tailscale sidecar's daemon
+# over the shared /var/run/tailscale socket volume, see docker-compose.yml.
+# `tailscale serve` needs elevated access unless the daemon has an operator
+# configured for the calling uid (node = 1000 here); the sidecar's
+# `TS_EXTRA_ARGS: --operator=node` grants that, so no sudo/setuid is needed —
+# good, because this container also sets security_opt: no-new-privileges.
+USER root
+COPY --from=docker.io/tailscale/tailscale:stable@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680 /usr/local/bin/tailscale /usr/local/bin/tailscale
+USER node

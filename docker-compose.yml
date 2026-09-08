@@ -47,6 +47,10 @@ services:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
       - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      # Shared with the `tailscale` sidecar below: lets this container's `tailscale`
+      # CLI (no daemon here) reach the sidecar's tailscaled over the control socket,
+      # so gateway.tailscale.mode automation works without NET_ADMIN in this container.
+      - "${OPENCLAW_TAILSCALE_SOCKET_DIR:-${HOME:-/tmp}/.openclaw-tailscale-socket}:/var/run/tailscale"
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -71,6 +75,13 @@ services:
       - "${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
     init: true
     restart: unless-stopped
+    # No depends_on for `tailscale` here: it joins this container's network
+    # namespace (network_mode below), so compose must create this container
+    # first — an explicit health-gated depends_on the other way would be
+    # circular. The gateway's own tailscale automation retries/reclaims the
+    # Serve claim once the sidecar finishes `tailscale up`; if the very first
+    # boot races it, restart openclaw-gateway once `docker compose ps` shows
+    # the tailscale sidecar healthy.
     command:
       [
         "node",
@@ -93,7 +104,55 @@ services:
       retries: 5
       start_period: 20s
 
+  # Runs tailscaled in userspace-networking mode (no TUN/NET_ADMIN needed) so the
+  # openclaw-gateway container's cap_drop: [NET_ADMIN, NET_RAW] hardening stays
+  # intact. openclaw-gateway only needs the `tailscale` CLI talking to this
+  # daemon's control socket to drive gateway.tailscale.mode ("serve"/"funnel").
+  tailscale:
+    build:
+      context: .
+      dockerfile: Dockerfile.tailscale-sidecar
+    # Joins openclaw-gateway's network namespace so `tailscale serve` (invoked
+    # by that container's `tailscale` CLI over the shared socket below) can
+    # target 127.0.0.1:18789 and actually reach the gateway listener — OpenClaw
+    # hardcodes a loopback proxy target (src/infra/tailscale.ts), it does not
+    # support a Docker-DNS service-name target.
+    network_mode: "service:openclaw-gateway"
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${OPENCLAW_TAILSCALE_HOSTNAME:-openclaw-gateway}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_ACCEPT_DNS: "false"
+      # Default userspace-mode socket lives at /tmp/tailscaled.sock with only a
+      # symlink at /var/run/tailscale/tailscaled.sock; /tmp isn't in the shared
+      # volume, so openclaw-gateway's `tailscale` CLI can't reach it. Force the
+      # real socket into the shared mount instead.
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      # Grants openclaw-gateway's `node` user (uid 1000) operator rights so its
+      # `tailscale` CLI can run `serve`/`funnel` without sudo (which would need
+      # setuid, blocked by that container's no-new-privileges hardening).
+      TS_EXTRA_ARGS: --operator=node
+    volumes:
+      - "${OPENCLAW_TAILSCALE_STATE_DIR:-${HOME:-/tmp}/.openclaw-tailscale-state}:/var/lib/tailscale"
+      - "${OPENCLAW_TAILSCALE_SOCKET_DIR:-${HOME:-/tmp}/.openclaw-tailscale-socket}:/var/run/tailscale"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   openclaw-cli:
+    # Interactive TUI only. Default `up -d` must not start it: without
+    # `--session agent:<id>:main` it exits 1 when multiple agents exist.
+    profiles: [cli]
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
     env_file:
@@ -127,6 +186,10 @@ services:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
       - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      # Same reasoning as openclaw-gateway: without this, this container's own
+      # `tailscale status` calls (e.g. `openclaw qr`'s MagicDNS lookup) can't
+      # reach the sidecar's daemon.
+      - "${OPENCLAW_TAILSCALE_SOCKET_DIR:-${HOME:-/tmp}/.openclaw-tailscale-socket}:/var/run/tailscale"
     stdin_open: true
     tty: true
     init: true

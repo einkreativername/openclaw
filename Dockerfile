@@ -19,6 +19,11 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:3638d9a6fe4030bd716be989438248074
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6"
+# Only the `tailscale` CLI binary is copied out of this image (see tailscale-binary
+# stage below); the daemon runs in a separate sidecar so this container keeps its
+# cap_drop: [NET_ADMIN, NET_RAW] hardening. To update:
+# docker pull tailscale/tailscale:stable && docker inspect tailscale/tailscale:stable --format '{{index .RepoDigests 0}}'
+ARG OPENCLAW_TAILSCALE_IMAGE="docker.io/tailscale/tailscale:stable@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
@@ -99,6 +104,7 @@ RUN sh scripts/docker/verify-native-addons.sh
 
 # ── Build ──────────────────────────────────────────────────────
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
+FROM ${OPENCLAW_TAILSCALE_IMAGE} AS tailscale-binary
 FROM dependency-inputs AS build
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
@@ -252,6 +258,16 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini && \
     update-ca-certificates
+
+# `tailscale` CLI only (no tailscaled): talks to the tailscale sidecar's daemon
+# over the shared /var/run/tailscale socket volume so gateway.tailscale.mode
+# automation (`tailscale serve ...`) works without this container needing
+# NET_ADMIN/NET_RAW — see docker-compose.yml's `tailscale` service.
+# `tailscale serve` needs elevated access unless the daemon has an operator
+# configured for the calling uid (node = 1000 here); the sidecar's
+# `TS_EXTRA_ARGS: --operator=node` grants that, so no sudo/setuid is needed —
+# good, because this container also sets security_opt: no-new-privileges.
+COPY --from=tailscale-binary /usr/local/bin/tailscale /usr/local/bin/tailscale
 
 # Keep npm as an operator-facing capability while replacing the base image's
 # bundled CLI dependency tree with the current release. The published package
