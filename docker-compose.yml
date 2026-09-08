@@ -73,6 +73,8 @@ services:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
       - "${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
+      # Host Tailscale Funnel targets this loopback port (see funnel-strip).
+      - "127.0.0.1:18791:18791"
     init: true
     restart: unless-stopped
     # No depends_on for `tailscale` here: it joins this container's network
@@ -196,3 +198,23 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+  # Strips Funnel X-Forwarded-* / tailscale-* headers. OpenClaw otherwise
+  # returns 403 proxy_attribution_required on Control UI. Shares the gateway
+  # netns so it can reach bind=loopback :18789. Host Funnel -> 127.0.0.1:18791.
+  funnel-strip:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    network_mode: "service:openclaw-gateway"
+    environment:
+      LISTEN_HOST: "0.0.0.0"
+      LISTEN_PORT: "18791"
+      TARGET_HOST: "127.0.0.1"
+      TARGET_PORT: "18789"
+    volumes:
+      - ./scripts/ts-funnel-proxy.py:/home/node/ts-funnel-proxy.py:ro
+    entrypoint: ["python3", "/home/node/ts-funnel-proxy.py"]
+    depends_on:
+      - openclaw-gateway
+    healthcheck:
+      disable: true
+    restart: unless-stopped
