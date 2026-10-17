@@ -18,7 +18,7 @@ ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/n
 # Global npm installs need root: newer base-image releases lock down
 # /usr/local/lib/node_modules against the non-root node user.
 USER root
-RUN npm install -g @xdevplatform/xurl
+RUN npm install -g --allow-scripts=@xdevplatform/xurl @xdevplatform/xurl
 
 # tailscale CLI only (no tailscaled): talks to the tailscale sidecar's daemon
 # over the shared /var/run/tailscale socket volume, see docker-compose.yml.
@@ -28,4 +28,29 @@ RUN npm install -g @xdevplatform/xurl
 # good, because this container also sets security_opt: no-new-privileges.
 USER root
 COPY --from=docker.io/tailscale/tailscale:stable@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680 /usr/local/bin/tailscale /usr/local/bin/tailscale
+
+# Skill CLIs enabled in the Mac gateway config. A container recreate drops
+# apt/brew installs that exist only in the writable layer. unzip has to be
+# present before the 1password-cli cask unpacks its zip.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg jq scrot tmux unzip xdotool \
+    && rm -rf /var/lib/apt/lists/*
+
+USER node
+RUN brew install gh gogcli 1password-cli
+
+# The bundle has no config key for these thresholds. The image default
+# (1536 / 3072 MiB) warns at the gateway's normal RSS. Match by source text:
+# the diagnostic filename hash changes when the base image changes.
+USER root
+RUN set -eu; \
+    files="$(grep -l 'DEFAULT_RSS_WARNING_BYTES = 1536 \* MB' /app/dist/*.mjs)"; \
+    test "$(printf '%s\n' "$files" | wc -l | tr -d ' ')" = "1"; \
+    sed -i \
+      -e 's/DEFAULT_RSS_WARNING_BYTES = 1536 \* MB/DEFAULT_RSS_WARNING_BYTES = 4096 * MB/' \
+      -e 's/DEFAULT_RSS_CRITICAL_BYTES = 3072 \* MB/DEFAULT_RSS_CRITICAL_BYTES = 6144 * MB/' \
+      "$files"; \
+    grep -q 'DEFAULT_RSS_WARNING_BYTES = 4096 \* MB' "$files"; \
+    grep -q 'DEFAULT_RSS_CRITICAL_BYTES = 6144 \* MB' "$files"
 USER node
