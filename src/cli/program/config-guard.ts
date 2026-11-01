@@ -242,6 +242,13 @@ export async function ensureConfigReady(
     commandName !== "health" &&
     commandName !== "logs" &&
     commandName !== "sessions" &&
+    // The reserved "tool"/"tools" roots have no implementation. They exist only so
+    // a plugin cannot claim the name, and the only thing they can do is report an
+    // unknown command. State migration preflight pulls in the doctor config flow,
+    // which discovers plugin metadata and builds a full plugin source capture
+    // (native binaries included) for that report. Skip it for both roots.
+    commandName !== "tool" &&
+    commandName !== "tools" &&
     // Remote RPC clients must not migrate state owned by the running gateway.
     !(commandName === "gateway" && subcommandName === "call") &&
     // A newer restart client may be controlling an older live Gateway. Validate
@@ -293,6 +300,11 @@ export async function ensureConfigReady(
 
   // Read-only diagnostics must not record config health. Core-only validation
   // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
+  // The reserved "tool"/"tools" roots have no implementation: they exist only so a
+  // plugin cannot claim the name. Discovery for them still ran the plugin source
+  // capture, which builds a full plugin artifact (native binaries included) for a
+  // command that can only ever answer "unknown command". Skip the capture and let
+  // the unknown-command path report the mistake.
   const configSnapshotOptions = params.validateConfigOnly
     ? ({ observe: false, pluginValidation: "core-only" } as const)
     : commandName === "logs"
@@ -301,7 +313,9 @@ export async function ensureConfigReady(
           (commandName === "gateway" && subcommandName === "call") ||
           isRestartController
         ? ({ observe: false } as const)
-        : undefined;
+        : commandName === "tool" || commandName === "tools"
+          ? ({ observe: false, pluginValidation: "core-only" } as const)
+          : undefined;
   let snapshot =
     preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   if (

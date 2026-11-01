@@ -295,6 +295,38 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("skips plugin metadata discovery for the reserved tool and tools roots", async () => {
+    // "tool"/"tools" are reserved roots without an implementation. Plugin metadata
+    // discovery runs the plugin source capture, which builds a full plugin artifact
+    // (native binaries included) for a command that can only answer "unknown
+    // command". Discovery must stay off for both roots.
+    await runEnsureConfigReady(["tool"]);
+    expect(readConfigFileSnapshotMock).toHaveBeenLastCalledWith({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+
+    await runEnsureConfigReady(["tools"]);
+    expect(readConfigFileSnapshotMock).toHaveBeenLastCalledWith({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+  });
+
+  it("skips plugin metadata discovery for reserved tool and tools subcommands", async () => {
+    await runEnsureConfigReady(["tools", "list"]);
+    expect(readConfigFileSnapshotMock).toHaveBeenLastCalledWith({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+
+    await runEnsureConfigReady(["tool", "call"]);
+    expect(readConfigFileSnapshotMock).toHaveBeenLastCalledWith({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+  });
+
   it("validates config without observing health, plugins, or startup migrations", async () => {
     await ensureConfigReady({
       runtime: makeRuntime() as never,
