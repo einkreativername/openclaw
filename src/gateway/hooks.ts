@@ -685,14 +685,63 @@ export function normalizeHookDispatchSessionKey(params: {
   return `agent:${targetAgentId}:${parsed.rest}`;
 }
 
+/** OpenClaw origin tag for Hook/A2A callers (Grok Bot etc.). */
+export const OPENCLAW_ORIGIN_HEADER = "x-openclaw-origin";
+const OPENCLAW_ORIGIN_MARKER_PREFIX = "[[openclaw-origin:";
+const OPENCLAW_ORIGIN_MARKER_SUFFIX = "]]";
+
+/** Normalize a caller-supplied origin tag (lowercase slug). */
+export function normalizeHookOrigin(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed || trimmed.length > 64) {
+    return undefined;
+  }
+  if (!/^[a-z0-9._-]+$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+/** Resolve origin from JSON body `origin` or `x-openclaw-origin` header. */
+export function resolveHookOrigin(params: {
+  payload: Record<string, unknown>;
+  headers?: Record<string, string>;
+}): string | undefined {
+  return (
+    normalizeHookOrigin(params.payload.origin) ||
+    normalizeHookOrigin(params.headers?.[OPENCLAW_ORIGIN_HEADER]) ||
+    normalizeHookOrigin(params.headers?.["x-origin"])
+  );
+}
+
+/** Prepend a stable origin marker so plugins can enforce origin-aware policy. */
+export function applyHookOriginMarker(message: string, origin: string | undefined): string {
+  if (!origin) {
+    return message;
+  }
+  const marker = `${OPENCLAW_ORIGIN_MARKER_PREFIX}${origin}${OPENCLAW_ORIGIN_MARKER_SUFFIX}`;
+  if (message.includes(marker)) {
+    return message;
+  }
+  // Strip a prior marker if present, then prepend the resolved origin.
+  const stripped = message.replace(/\[\[openclaw-origin:[a-z0-9._-]+\]\]\s*/i, "");
+  return `${marker}\n${stripped}`;
+}
+
 /** Validate and normalize a hook agent payload before policy/session resolution. */
 export function normalizeAgentPayload(
   payload: Record<string, unknown>,
+  headers?: Record<string, string>,
 ): Result<HookAgentPayload, string> {
-  const message = normalizeOptionalString(payload.message) ?? "";
-  if (!message) {
+  const rawMessage = normalizeOptionalString(payload.message) ?? "";
+  if (!rawMessage) {
     return { ok: false, error: "message required" };
   }
+  const origin = resolveHookOrigin({ payload, headers });
+  const message = applyHookOriginMarker(rawMessage, origin);
   const nameRaw = payload.name;
   const name = normalizeOptionalString(nameRaw) ?? "Hook";
   const agentId = normalizeHookPayloadAgentId(payload.agentId);

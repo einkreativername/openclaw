@@ -478,7 +478,7 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: "waitForCompletion must be boolean" });
         return true;
       }
-      const normalized = normalizeAgentPayload(payload);
+      const normalized = normalizeAgentPayload(payload, headers);
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
