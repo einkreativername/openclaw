@@ -236,3 +236,15 @@ extensions/discord/assets/embedded-app-sdk.mjs
 
 # Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
 .build/
+
+# Observability (Schnitt 2)
+config/observability/gateway-token
+docker-compose.observability.yml
+
+# Secrets (Schnitt 5)
+secrets/
+.sops.yaml
+
+# Local .env backups must never be committed; they carry live tokens.
+.env.bak.*
+.env.*.bak.*
