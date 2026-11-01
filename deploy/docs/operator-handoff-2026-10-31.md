@@ -246,18 +246,18 @@ weil FD-Matrizen Rohdaten-Kontext enthalten.
 
 ## 8. Offene Owner-Aufgaben
 
-| #   | Aufgabe                                   | Exakter Weg                                                                                                    | Priorität |
-| --- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------- |
-| 1   | `l33th4x` Token/Netzwerk                  | Token via BotFather prüfen; ausgehende IP des Containers gegen Telegram prüfen                                 | hoch      |
-| 2   | `charmswing`                              | gültigen `TELEGRAM_CHARMSWING_BOT_TOKEN` setzen oder Agent deaktivieren                                        | mittel    |
-| 3   | Cleanup Szene `5eb90765`                  | `DELETE` nach GO                                                                                               | mittel    |
-| 4   | Cleanup Agent-Memory `__probe__` (ID 298) | `DELETE /api/fd/agent-memory/lexi/__probe__` nach GO                                                           | niedrig   |
-| 5   | Keyholder-Pairing `userId 3`              | `POST /api/fd/keyholder/pair` + `POST /api/fd/keyholder/accept`                                                | mittel    |
-| 6   | xai-OAuth Re-Auth                         | `openclaw models auth login --provider xai --profile-id 'xai:einkreativertyp@gmail.com'`                       | mittel    |
-| 7   | Google-Profil anlegen                     | `GEMINI_API_KEY` ist in der Env, aber kein registriertes Profil                                                | mittel    |
-| 8   | venice Top-up                             | Billing-Fenster war bis 31.10. 13:20Z                                                                          | niedrig   |
-| 9   | iCloud 2FA Re-Auth                        | Owner-only; bis dahin `fd-icloud-skill` als nicht verfügbar führen                                             | niedrig   |
-| 10  | FD-Routenbericht                          | Blackmail, Screen, Companion, Devices, Dreamquest, Scene-/Choice-Lifecycle, Game-Engine-Spin → `lexiclaw`-Repo | mittel    |
+| #   | Aufgabe                                   | Exakter Weg                                                                                                            | Priorität |
+| --- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------- |
+| 1   | `l33th4x` Token/Netzwerk                  | Token via BotFather prüfen; ausgehende IP des Containers gegen Telegram prüfen                                         | hoch      |
+| 2   | `charmswing`                              | gültigen `TELEGRAM_CHARMSWING_BOT_TOKEN` setzen oder Agent deaktivieren                                                | mittel    |
+| 3   | Cleanup Szene `5eb90765`                  | `DELETE` nach GO                                                                                                       | mittel    |
+| 4   | Cleanup Agent-Memory `__probe__` (ID 298) | `DELETE /api/fd/agent-memory/lexi/__probe__` nach GO                                                                   | niedrig   |
+| 5   | Keyholder-Pairing `userId 3`              | `POST /api/fd/keyholder/pair` + `POST /api/fd/keyholder/accept`                                                        | mittel    |
+| 6   | xai-OAuth Re-Auth                         | `openclaw models auth login --provider xai --profile-id 'xai:<profil-id>'` (Profil-ID via `openclaw models auth list`) | mittel    |
+| 7   | Google-Profil anlegen                     | `GEMINI_API_KEY` ist in der Env, aber kein registriertes Profil                                                        | mittel    |
+| 8   | venice Top-up                             | Billing-Fenster war bis 31.10. 13:20Z                                                                                  | niedrig   |
+| 9   | iCloud 2FA Re-Auth                        | Owner-only; bis dahin `fd-icloud-skill` als nicht verfügbar führen                                                     | niedrig   |
+| 10  | FD-Routenbericht                          | Blackmail, Screen, Companion, Devices, Dreamquest, Scene-/Choice-Lifecycle, Game-Engine-Spin → `lexiclaw`-Repo         | mittel    |
 
 ---
 
