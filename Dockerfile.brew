@@ -40,17 +40,90 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 USER node
 RUN brew install gh gogcli 1password-cli
 
-# The bundle has no config key for these thresholds. The image default
-# (1536 / 3072 MiB) warns at the gateway's normal RSS. Match by source text:
-# the diagnostic filename hash changes when the base image changes.
+# Memory-pressure thresholds.
+#
+# Base images up to 2026.10.4 hardcoded DEFAULT_RSS_WARNING_BYTES /
+# DEFAULT_RSS_CRITICAL_BYTES (1536 / 3072 MiB) into the diagnostic bundle, which
+# warned during the gateway's normal RSS. This image raised them to 4096 / 6144
+# MiB by patching the built bundle text.
+#
+# From 2026.10.5 on, upstream derives the limits from the runtime instead:
+# rssLimitBytes = min(process.constrainedMemory(), physicalMemoryBytes) with
+# WARNING_RATIO 0.8 and CRITICAL_RATIO 0.9. Under a container memory limit that
+# already tracks the container, so the text patch is obsolete there. Keep the
+# stage for older base images and make it a no-op once upstream owns the limit.
 USER root
 RUN set -eu; \
-    files="$(grep -l 'DEFAULT_RSS_WARNING_BYTES = 1536 \* MB' /app/dist/*.mjs)"; \
-    test "$(printf '%s\n' "$files" | wc -l | tr -d ' ')" = "1"; \
-    sed -i \
-      -e 's/DEFAULT_RSS_WARNING_BYTES = 1536 \* MB/DEFAULT_RSS_WARNING_BYTES = 4096 * MB/' \
-      -e 's/DEFAULT_RSS_CRITICAL_BYTES = 3072 \* MB/DEFAULT_RSS_CRITICAL_BYTES = 6144 * MB/' \
-      "$files"; \
-    grep -q 'DEFAULT_RSS_WARNING_BYTES = 4096 \* MB' "$files"; \
-    grep -q 'DEFAULT_RSS_CRITICAL_BYTES = 6144 \* MB' "$files"
+    files="$(grep -l 'DEFAULT_RSS_WARNING_BYTES = 1536 \* MB' /app/dist/*.mjs || true)"; \
+    count="$(printf '%s\n' "$files" | grep -c . || true)"; \
+    if [ "$count" -gt 1 ]; then \
+      echo "unexpected number of RSS-threshold matches: $count" >&2; \
+      printf '%s\n' "$files" >&2; \
+      exit 1; \
+    fi; \
+    if [ "$count" -eq 1 ]; then \
+      sed -i \
+        -e 's/DEFAULT_RSS_WARNING_BYTES = 1536 \* MB/DEFAULT_RSS_WARNING_BYTES = 4096 * MB/' \
+        -e 's/DEFAULT_RSS_CRITICAL_BYTES = 3072 \* MB/DEFAULT_RSS_CRITICAL_BYTES = 6144 * MB/' \
+        "$files"; \
+      grep -q 'DEFAULT_RSS_WARNING_BYTES = 4096 \* MB' "$files"; \
+      grep -q 'DEFAULT_RSS_CRITICAL_BYTES = 6144 \* MB' "$files"; \
+    fi
+USER node
+
+# Config-guard bundle patch.
+#
+# The reserved "tool"/"tools" roots have no implementation, so an invocation can
+# only report an unknown command. The config guard still ran the startup
+# preflight for them, and that preflight discovers plugin metadata, which
+# builds a full plugin source capture for a command that can only report a
+# mistake. Skip the preflight for both roots and give them the same core-only
+# plugin validation read-only diagnostics already use.
+USER root
+COPY scripts/patch-config-guard-bundle.mjs /tmp/patch-config-guard-bundle.mjs
+RUN set -eu; \
+    node /tmp/patch-config-guard-bundle.mjs; \
+    node -e "const r=require('/tmp/config-guard-patch.json'); \
+      const fail=(m)=>{console.error('config-guard bundle patch gate failed: '+m); process.exit(1);}; \
+      if (!Array.isArray(r.results) || r.results.length === 0) fail('no target files found'); \
+      for (const x of r.results) { \
+        if (x.status !== 'patched' && x.status !== 'already-patched') fail('unexpected status '+x.status+' in '+x.file); \
+        if (x.status === 'patched' && (!x.changes || !x.verified)) fail('incomplete patch for '+x.file); \
+      } \
+      if (r.allVerified !== true) fail('verification did not succeed for every target');"
+USER node
+
+
+# Skill dispatcher CLI ("openclaw tools ...").
+#
+# Upstream ships no "tools" command; "tool"/"tools" are reserved non-plugin
+# command roots. Replace the /usr/local/bin/openclaw symlink with a tiny
+# dispatcher that routes only the reserved root to the skill dispatcher and
+# forwards every other invocation to the untouched upstream launcher.
+USER root
+COPY scripts/openclaw-cli-wrapper.sh /tmp/openclaw-cli-wrapper.sh
+COPY scripts/openclaw-tools.mjs /app/openclaw-tools.mjs
+RUN set -eu; \
+    chmod 0755 /tmp/openclaw-cli-wrapper.sh; \
+    rm -f /usr/local/bin/openclaw; \
+    cp /tmp/openclaw-cli-wrapper.sh /usr/local/bin/openclaw; \
+    chmod 0755 /usr/local/bin/openclaw; \
+    rm -f /tmp/openclaw-cli-wrapper.sh; \
+    node --check /app/openclaw-tools.mjs; \
+    /usr/local/bin/openclaw --version
+USER node
+
+
+# Plugin-source capture retention.
+#
+# The Core classifies <stateDir>/tmp/plugin-captures as volatile for backups
+# but never deletes it, so failed gateway boots leave hundreds of MB behind.
+# Ship the pruner in the image so retention is self-contained: the compose
+# service "plugin-captures-pruner" runs it against the shared config bind
+# mount with its own lifecycle, independent of the gateway.
+USER root
+COPY scripts/prune-plugin-captures.mjs /app/prune-plugin-captures.mjs
+RUN set -eu; \
+    chmod 0755 /app/prune-plugin-captures.mjs; \
+    node --check /app/prune-plugin-captures.mjs
 USER node

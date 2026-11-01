@@ -199,6 +199,62 @@ services:
     depends_on:
       - openclaw-gateway
 
+  # Retention for plugin source captures.
+  #
+  # OpenClaw materializes every plugin source capture under
+  # <stateDir>/tmp/plugin-captures/<uuid>/. Those directories are pure build
+  # scratch: nothing reads them after the capture is applied, but they are
+  # never garbage collected by the runtime, so a long-lived gateway accumulates
+  # gigabytes of dead weight in the config bind mount.
+  #
+  # This service runs the bundled pruner (scripts/prune-plugin-captures.mjs,
+  # baked into the image) as a watcher on its own 15-minute interval, fully
+  # independent of the gateway lifecycle. The cutoff is 2h of *tree* age
+  # (newest mtime inside the capture).
+  #
+  # The age cutoff alone does not protect the capture the running gateway is
+  # using: the gateway keeps its SQLite handle (owner.sqlite) open, so that
+  # capture's mtime can stay below the cutoff only by accident. The pruner
+  # therefore joins the gateway's PID namespace (pid: service:openclaw-gateway)
+  # and treats every capture that the gateway still holds open via
+  # /proc/<pid>/fd as in use. If the gateway process cannot be identified or
+  # its file descriptors cannot be read, the pruner aborts the cycle instead of
+  # deleting anything.
+  #
+  # Only the capture directory itself is mounted, not the whole config dir:
+  # the pruner's safety guard refuses any root that is not a
+  # .../tmp/plugin-captures path.
+  plugin-captures-pruner:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    depends_on:
+      - openclaw-gateway
+    pid: "service:openclaw-gateway"
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TZ: ${OPENCLAW_TZ:-UTC}
+      PLUGIN_CAPTURES_PROC_ROOT: /proc
+    volumes:
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/tmp/plugin-captures:/home/node/.openclaw/tmp/plugin-captures"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - node
+      - /app/prune-plugin-captures.mjs
+      - --dir
+      - /home/node/.openclaw/tmp/plugin-captures
+      - --max-age-hours
+      - "2"
+      - --watch
+      - --interval-seconds
+      - "900"
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
   # Strips Funnel X-Forwarded-* / tailscale-* headers. OpenClaw otherwise
   # returns 403 proxy_attribution_required on Control UI. Shares the gateway
   # netns so it can reach bind=loopback :18789. Host Funnel -> 127.0.0.1:18791.
