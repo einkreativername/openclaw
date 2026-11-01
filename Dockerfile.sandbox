@@ -1,0 +1,12 @@
+# Gateway-Image für Sandbox-Betrieb: openclaw-with-brew + Docker-CLI (Client only).
+# Der Client spricht über den in docker-compose.sandbox.yml gemounteten
+# /var/run/docker.sock mit der OrbStack-Engine auf dem Host.
+# Build: docker build -t openclaw-with-brew-sandbox:latest -f Dockerfile.sandbox .
+
+FROM openclaw-with-brew:latest
+
+USER root
+# Statischer Client-Binary aus dem offiziellen CLI-Image — kein apt nötig.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+RUN chmod 755 /usr/local/bin/docker
+USER node

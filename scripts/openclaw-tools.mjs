@@ -40,7 +40,34 @@ const require = createRequire(import.meta.url);
 const DEFAULT_CHANNEL_TYPE = "telegram";
 
 /** Hard ceiling for a single skill call. */
-const CALL_TIMEOUT_MS = 90_000;
+const DEFAULT_CALL_TIMEOUT_MS = 90_000;
+
+/**
+ * Resolve the per-call timeout.
+ *
+ * `OPENCLAW_TOOLS_CALL_TIMEOUT_MS` overrides the default for slow skills. The
+ * value is resolved lazily (only when a call actually runs) and validated
+ * strictly: only a positive integer is accepted. An invalid value is a hard
+ * configuration error instead of a silent fallback, because a silently
+ * ignored override would hide a misconfigured timeout until the next hang.
+ */
+function resolveCallTimeoutMs() {
+  const raw = process.env.OPENCLAW_TOOLS_CALL_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_CALL_TIMEOUT_MS;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new ToolsError(
+      `invalid OPENCLAW_TOOLS_CALL_TIMEOUT_MS: expected a positive integer of milliseconds, got "${raw}"`,
+    );
+  }
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new ToolsError(
+      `invalid OPENCLAW_TOOLS_CALL_TIMEOUT_MS: expected a positive integer of milliseconds, got "${raw}"`,
+    );
+  }
+  return value;
+}
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".cache", "dist", "build", "coverage"]);
 const SKIP_FILES = new Set(["SKILL.md"]);
@@ -262,6 +289,66 @@ function hydrateServiceEnvironment() {
 }
 
 // ---------------------------------------------------------------------------
+// output plumbing
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracked writes for stdout/stderr.
+ *
+ * The wrapper must not depend on the event loop draining before it exits:
+ * a skill runner may leave sockets or timers open (an in-process `run()`
+ * that never resolves keeps its handles alive), and `process.exitCode` alone
+ * would then hang the caller forever. Every write is therefore registered
+ * here so the exit path can wait for the stream to actually flush before
+ * terminating the process.
+ *
+ * Stream ordering guarantees that a write callback only fires once the
+ * preceding chunks of the same stream have been flushed as well, so awaiting
+ * the tracked writes is enough to know that stdout/stderr are complete.
+ */
+const pendingWrites = new Set();
+
+function writeTracked(stream, chunk) {
+  let settle;
+  const tracked = new Promise((resolve) => {
+    settle = resolve;
+  });
+  pendingWrites.add(tracked);
+  stream.write(chunk, () => {
+    pendingWrites.delete(tracked);
+    settle();
+  });
+  return tracked;
+}
+
+function writeOut(chunk) {
+  return writeTracked(process.stdout, chunk);
+}
+
+function writeErr(chunk) {
+  return writeTracked(process.stderr, chunk);
+}
+
+/** Wait until every tracked stdout/stderr write has been flushed. */
+async function flushWrites() {
+  while (pendingWrites.size > 0) {
+    await Promise.all([...pendingWrites]);
+  }
+}
+
+/**
+ * Terminate deterministically after flushing output.
+ *
+ * `process.exit()` is used on purpose: the wrapper owns the whole process
+ * lifetime and must not be kept alive by handles owned by a skill runner.
+ */
+async function exitWith(code) {
+  process.exitCode = code;
+  await flushWrites();
+  process.exit(code);
+}
+
+// ---------------------------------------------------------------------------
 // subcommands
 // ---------------------------------------------------------------------------
 
@@ -281,18 +368,16 @@ function cmdList(args) {
     return 0;
   }
   if (skills.length === 0) {
-    process.stderr.write("no skills found\n");
+    writeErr("no skills found\n");
     return 1;
   }
   for (const skill of skills) {
     const marker = skill.executable ? "run" : " - ";
     const actions = skill.actions.length > 0 ? ` [${skill.actions.join(", ")}]` : "";
-    process.stdout.write(`${marker}  ${skill.name}${actions}\n`);
-    if (skill.description) process.stdout.write(`      ${skill.description}\n`);
+    writeOut(`${marker}  ${skill.name}${actions}\n`);
+    if (skill.description) writeOut(`      ${skill.description}\n`);
   }
-  process.stdout.write(
-    `\n${skills.length} skills, ${skills.filter((s) => s.executable).length} executable\n`,
-  );
+  writeOut(`\n${skills.length} skills, ${skills.filter((s) => s.executable).length} executable\n`);
   return 0;
 }
 
@@ -316,13 +401,13 @@ function cmdInfo(args) {
     printJson(info);
     return 0;
   }
-  process.stdout.write(`${info.name}\n`);
-  if (info.description) process.stdout.write(`  ${info.description}\n`);
-  process.stdout.write(`  path:     ${info.path}\n`);
-  process.stdout.write(`  runner:   ${info.runner}\n`);
-  process.stdout.write(`  contract: ${info.contract}\n`);
-  process.stdout.write(`  callable: ${info.executable ? "yes" : "no (prompt-only skill)"}\n`);
-  if (info.actions.length > 0) process.stdout.write(`  actions:  ${info.actions.join(", ")}\n`);
+  writeOut(`${info.name}\n`);
+  if (info.description) writeOut(`  ${info.description}\n`);
+  writeOut(`  path:     ${info.path}\n`);
+  writeOut(`  runner:   ${info.runner}\n`);
+  writeOut(`  contract: ${info.contract}\n`);
+  writeOut(`  callable: ${info.executable ? "yes" : "no (prompt-only skill)"}\n`);
+  if (info.actions.length > 0) writeOut(`  actions:  ${info.actions.join(", ")}\n`);
   return 0;
 }
 
@@ -355,12 +440,10 @@ function cmdCheck(args) {
   let failed = 0;
   for (const entry of report) {
     if (entry.status !== "ok") failed += 1;
-    process.stdout.write(
-      `${entry.status === "ok" ? "ok  " : "skip"}  ${entry.name}  (${entry.detail})\n`,
-    );
+    writeOut(`${entry.status === "ok" ? "ok  " : "skip"}  ${entry.name}  (${entry.detail})\n`);
   }
   const callable = report.filter((entry) => entry.status === "ok").length;
-  process.stdout.write(`\n${report.length} skills, ${callable} callable, ${failed} not callable\n`);
+  writeOut(`\n${report.length} skills, ${callable} callable, ${failed} not callable\n`);
   return 0;
 }
 
@@ -413,15 +496,20 @@ async function callSkillIndex(skill, payload) {
   return await fn(argument);
 }
 
-function callSkillScript(skill, payload) {
+function callSkillScript(skill, payload, timeoutMs) {
   const result = spawnSync(process.execPath, [skill.runnerPath, JSON.stringify(payload)], {
     cwd: skill.dir,
     encoding: "utf8",
-    timeout: CALL_TIMEOUT_MS,
+    timeout: timeoutMs,
     maxBuffer: 32 * 1024 * 1024,
     env: process.env,
   });
-  if (result.error) throw new ToolsError(`${skill.name} runner failed: ${result.error.message}`);
+  if (result.error) {
+    if (result.error.code === "ETIMEDOUT") {
+      throw new ToolsError(`skill ${skill.name} timed out after ${timeoutMs}ms`);
+    }
+    throw new ToolsError(`${skill.name} runner failed: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     const stderr = (result.stderr || "").trim();
     throw new ToolsError(
@@ -451,10 +539,16 @@ async function cmdCall(args) {
   hydrateServiceEnvironment();
   const payload = buildPayload(positional[1], positional[2]);
 
+  // Resolve once so the script timeout and the in-process watchdog share the
+  // same budget; a mismatch would report a timeout that never happened.
+  const timeoutMs = resolveCallTimeoutMs();
+
   const result = await withTimeout(
-    skill.runner === "index" ? callSkillIndex(skill, payload) : callSkillScript(skill, payload),
-    CALL_TIMEOUT_MS,
-    `skill ${skill.name} timed out after ${CALL_TIMEOUT_MS}ms`,
+    skill.runner === "index"
+      ? callSkillIndex(skill, payload)
+      : callSkillScript(skill, payload, timeoutMs),
+    timeoutMs,
+    `skill ${skill.name} timed out after ${timeoutMs}ms`,
   );
 
   printJson(result === undefined ? { success: true } : result);
@@ -482,7 +576,7 @@ function withTimeout(promise, ms, message) {
 // ---------------------------------------------------------------------------
 
 function printJson(value) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  writeOut(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 function usage() {
@@ -499,6 +593,7 @@ function usage() {
     "  OPENCLAW_SKILLS_DIR      skill roots (path-delimited)",
     "  OPENCLAW_CHANNEL_TYPE    default channel type (telegram)",
     "  OPENCLAW_CHANNEL_USER_ID channel user id (required; no built-in default)",
+    `  OPENCLAW_TOOLS_CALL_TIMEOUT_MS per-call timeout in ms (default ${DEFAULT_CALL_TIMEOUT_MS}; must be > 0)`,
   ].join("\n");
 }
 
@@ -508,7 +603,7 @@ async function main() {
   const rest = argv.slice(1);
 
   if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
-    process.stdout.write(`${usage()}\n`);
+    writeOut(`${usage()}\n`);
     return subcommand ? 0 : 1;
   }
 
@@ -527,12 +622,9 @@ async function main() {
 }
 
 main()
-  .then((code) => {
-    process.exitCode = code ?? 0;
-  })
+  .then((code) => exitWith(code ?? 0))
   .catch((error) => {
     const message =
       error instanceof ToolsError ? error.message : `unexpected failure: ${error?.stack || error}`;
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
+    return writeErr(`${message}\n`).then(() => exitWith(1));
   });

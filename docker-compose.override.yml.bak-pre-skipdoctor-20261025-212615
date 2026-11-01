@@ -1,0 +1,38 @@
+# Local OrbStack pin. Gitignored.
+# 2026-09-22 ~19:04 policy: THIS Mac Docker openclaw-gateway is the SOLE Telegram poller.
+# Railway lexiclaw-gateway must not poll. Native LaunchAgent stays disabled.
+# 2026-10-07 constraint: openclaw.json muss gateway.port=18789 + gateway.bind="loopback"
+# behalten (tailscale.mode=serve erzwingt Loopback; siehe Runbook
+# lexiclaw/docs/runbooks/agent-operations-orbstack.md). Extern läuft alles über
+# funnel-strip auf :18791 — Config-Port NIE auf 18791/len ändern.
+services:
+  openclaw-gateway:
+    labels:
+      dev.orbstack.http-port: "18791"
+    # Nicht das Upstream-Dockerfile bauen: das ersetzt openclaw-with-brew-sandbox
+    # durch ein Image ohne Homebrew, xurl und Docker-CLI. xurl, die Skill-CLIs
+    # (jq, ffmpeg, scrot, xdotool, tmux, unzip, gh, gog, op) und die RSS-Schwellen
+    # 4096/6144 MiB kommen aus Dockerfile.brew. Dockerfile.sandbox setzt nur die
+    # Docker-CLI darauf. Brew-Image vorher bauen. Leerer Build-Kontext.
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    environment:
+      KINKYGATE_API_URL: http://server.lexiclaw.orb.local:3001
+      # 2026-10-17: Single-Poller-Lease (#549). Wirkt erst nach Recreate.
+      OPENCLAW_TELEGRAM_POLLER: "1"
+      # aarch64 CPU-Runtime v1.13.2 + Piper lessac-high liegen auf dem State-Mount
+      # (Host: ~/.openclaw-docker/tools/sherpa-onnx-tts), nicht im Image.
+      SHERPA_ONNX_RUNTIME_DIR: /home/node/.openclaw/tools/sherpa-onnx-tts/runtime
+      SHERPA_ONNX_MODEL_DIR: /home/node/.openclaw/tools/sherpa-onnx-tts/models/vits-piper-en_US-lessac-high
+      # .env zeigt noch auf /home/devuser/.npm-global/bin/xurl. Die Binary aus
+      # Dockerfile.brew liegt hier.
+      XURL_BIN: /usr/local/bin/xurl
+      # Workflow-YAMLs persistent aus dem gemounteten Gateway-Home
+      # (Host: ~/.openclaw-docker/workflows), nicht aus dem Container-Overlay.
+      WORKFLOWS_DIR: /home/node/.openclaw/workflows
+  openclaw-cli:
+    environment:
+      SHERPA_ONNX_RUNTIME_DIR: /home/node/.openclaw/tools/sherpa-onnx-tts/runtime
+      SHERPA_ONNX_MODEL_DIR: /home/node/.openclaw/tools/sherpa-onnx-tts/models/vits-piper-en_US-lessac-high
+      XURL_BIN: /usr/local/bin/xurl

@@ -1,0 +1,220 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      # Pin container-side state, workspace, and config paths so host values written to
+      # `.env` (used by Compose for the bind-mount source below) cannot leak
+      # into runtime code that resolves these env vars inside the container.
+      # Without this override, a macOS host path like /Users/<you>/.openclaw/...
+      # imported from .env caused first-reply `mkdir '/Users'` EACCES failures
+      # in Linux Docker (#77436).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      # .env controls host publishing; in-container clients use the fixed listener.
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      # Empty means auto: Bonjour disables itself in detected containers.
+      # Set 0 only on host/macvlan/mDNS-capable networks; set 1 to force off.
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-}
+      # OpenTelemetry export is outbound OTLP/HTTP from the Gateway. Prometheus
+      # uses the existing authenticated Gateway route; it does not need a port.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: ${OTEL_EXPORTER_OTLP_TRACES_PROTOCOL:-}
+      OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: ${OTEL_EXPORTER_OTLP_METRICS_PROTOCOL:-}
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: ${OTEL_EXPORTER_OTLP_LOGS_PROTOCOL:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
+      OTEL_SEMCONV_STABILITY_OPT_IN: ${OTEL_SEMCONV_STABILITY_OPT_IN:-}
+      OPENCLAW_OTEL_PRELOADED: ${OPENCLAW_OTEL_PRELOADED:-}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+      - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
+      - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      # Shared with the `tailscale` sidecar below: lets this container's `tailscale`
+      # CLI (no daemon here) reach the sidecar's tailscaled over the control socket,
+      # so gateway.tailscale.mode automation works without NET_ADMIN in this container.
+      - "${OPENCLAW_TAILSCALE_SOCKET_DIR:-${HOME:-/tmp}/.openclaw-tailscale-socket}:/var/run/tailscale"
+      ## Uncomment the lines below to enable sandbox isolation
+      ## (agents.defaults.sandbox). Requires Docker CLI in the image
+      ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
+      ## scripts/docker/setup.sh with OPENCLAW_SANDBOX=1 for automated setup.
+      ## Set DOCKER_GID to the host's docker group GID (run: stat -c '%g' /var/run/docker.sock).
+      # - /var/run/docker.sock:/var/run/docker.sock
+    # group_add:
+    #   - "${DOCKER_GID:-999}"
+    # Let bundled local-model providers reach host-side LM Studio/Ollama via
+    # http://host.docker.internal:<port>. Docker Desktop usually provides this
+    # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
+      # Host Tailscale Funnel targets this loopback port (see funnel-strip).
+      - "127.0.0.1:18791:18791"
+    init: true
+    restart: unless-stopped
+    # No depends_on for `tailscale` here: it joins this container's network
+    # namespace (network_mode below), so compose must create this container
+    # first — an explicit health-gated depends_on the other way would be
+    # circular. The gateway's own tailscale automation retries/reclaims the
+    # Serve claim once the sidecar finishes `tailscale up`; if the very first
+    # boot races it, restart openclaw-gateway once `docker compose ps` shows
+    # the tailscale sidecar healthy.
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "dist/docker-healthcheck.js",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Runs tailscaled in userspace-networking mode (no TUN/NET_ADMIN needed) so the
+  # openclaw-gateway container's cap_drop: [NET_ADMIN, NET_RAW] hardening stays
+  # intact. openclaw-gateway only needs the `tailscale` CLI talking to this
+  # daemon's control socket to drive gateway.tailscale.mode ("serve"/"funnel").
+  tailscale:
+    build:
+      context: .
+      dockerfile: Dockerfile.tailscale-sidecar
+    # Joins openclaw-gateway's network namespace so `tailscale serve` (invoked
+    # by that container's `tailscale` CLI over the shared socket below) can
+    # target 127.0.0.1:18789 and actually reach the gateway listener — OpenClaw
+    # hardcodes a loopback proxy target (src/infra/tailscale.ts), it does not
+    # support a Docker-DNS service-name target.
+    network_mode: "service:openclaw-gateway"
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${OPENCLAW_TAILSCALE_HOSTNAME:-openclaw-gateway}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_ACCEPT_DNS: "false"
+      # Default userspace-mode socket lives at /tmp/tailscaled.sock with only a
+      # symlink at /var/run/tailscale/tailscaled.sock; /tmp isn't in the shared
+      # volume, so openclaw-gateway's `tailscale` CLI can't reach it. Force the
+      # real socket into the shared mount instead.
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      # Grants openclaw-gateway's `node` user (uid 1000) operator rights so its
+      # `tailscale` CLI can run `serve`/`funnel` without sudo (which would need
+      # setuid, blocked by that container's no-new-privileges hardening).
+      TS_EXTRA_ARGS: --operator=node
+    volumes:
+      - "${OPENCLAW_TAILSCALE_STATE_DIR:-${HOME:-/tmp}/.openclaw-tailscale-state}:/var/lib/tailscale"
+      - "${OPENCLAW_TAILSCALE_SOCKET_DIR:-${HOME:-/tmp}/.openclaw-tailscale-socket}:/var/run/tailscale"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  openclaw-cli:
+    # Interactive TUI only. Default `up -d` must not start it: without
+    # `--session agent:<id>:main` it exits 1 when multiple agents exist.
+    profiles: [cli]
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    network_mode: "service:openclaw-gateway"
+    env_file:
+      - path: .env
+        required: false
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      # Pin container-side state, workspace, and config paths so host values written to
+      # `.env` cannot leak into runtime code via the env_file import (#77436).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      # Shared gateway network namespace: use its listener, not the .env host port.
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      BROWSER: echo
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+      - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
+      - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      # Same reasoning as openclaw-gateway: without this, this container's own
+      # `tailscale status` calls (e.g. `openclaw qr`'s MagicDNS lookup) can't
+      # reach the sidecar's daemon.
+      - "${OPENCLAW_TAILSCALE_SOCKET_DIR:-${HOME:-/tmp}/.openclaw-tailscale-socket}:/var/run/tailscale"
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      - openclaw-gateway
+
+  # Strips Funnel X-Forwarded-* / tailscale-* headers. OpenClaw otherwise
+  # returns 403 proxy_attribution_required on Control UI. Shares the gateway
+  # netns so it can reach bind=loopback :18789. Host Funnel -> 127.0.0.1:18791.
+  funnel-strip:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    network_mode: "service:openclaw-gateway"
+    environment:
+      LISTEN_HOST: "0.0.0.0"
+      LISTEN_PORT: "18791"
+      TARGET_HOST: "127.0.0.1"
+      TARGET_PORT: "18789"
+    volumes:
+      - ./scripts/ts-funnel-proxy.py:/home/node/ts-funnel-proxy.py:ro
+    entrypoint: ["python3", "/home/node/ts-funnel-proxy.py"]
+    depends_on:
+      - openclaw-gateway
+    healthcheck:
+      disable: true
+    restart: unless-stopped

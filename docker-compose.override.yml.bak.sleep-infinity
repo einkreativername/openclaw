@@ -1,0 +1,12 @@
+# Local OrbStack pin. Gitignored.
+# 2026-09-22 leethax: Railway owns Telegram polling. Local gateway entrypoint
+# replaced with sleep so accidental `compose up` cannot cause getUpdates 409.
+# To run a REAL local gateway temporarily, comment out the entrypoint/command block.
+services:
+  openclaw-gateway:
+    labels:
+      dev.orbstack.http-port: "18791"
+    environment:
+      KINKYGATE_API_URL: http://server.lexiclaw.orb.local:3001
+    entrypoint: ["sleep", "infinity"]
+    command: []

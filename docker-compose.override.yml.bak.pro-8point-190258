@@ -1,0 +1,10 @@
+# Local OrbStack pin. Gitignored.
+# Pro-8point: real local gateway restored for nodes/Control UI on :18789.
+# Telegram polling stays OFF on docker (see openclaw.json channels) so Railway
+# lexiclaw-gateway remains the sole getUpdates poller (avoids 409 conflict).
+services:
+  openclaw-gateway:
+    labels:
+      dev.orbstack.http-port: "18791"
+    environment:
+      KINKYGATE_API_URL: http://server.lexiclaw.orb.local:3001

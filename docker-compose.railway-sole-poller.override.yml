@@ -1,0 +1,5 @@
+# Railway lexiclaw-gateway owns Telegram polling.
+# Start local gateway only with: docker compose --profile local-gateway up
+services:
+  openclaw-gateway:
+    profiles: ["local-gateway"]
