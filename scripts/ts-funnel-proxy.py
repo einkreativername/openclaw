@@ -126,6 +126,14 @@ def _handle(client: socket.socket) -> None:
             TARGET_HOST, TARGET_PORT, socket.AF_INET, socket.SOCK_STREAM
         )
         remote = socket.create_connection(infos[0][4], 5)
+        # create_connection() only applies its `timeout` arg to the connect
+        # call, but leaves it set on the socket afterwards (stdlib quirk).
+        # Left in place, any idle gap over 5s in the gateway's replies (e.g. a
+        # quiet WebSocket) raises a timeout inside `_pipe`, which the broad
+        # `except OSError` there treats like a normal close and tears the
+        # whole connection down — killing every long-lived Control UI socket
+        # every few seconds (#observed repeated code=1006 reconnect loop).
+        remote.settimeout(None)
         remote.sendall(strip_attribution_headers(raw_headers) + body)
         if leftover:
             remote.sendall(leftover)
