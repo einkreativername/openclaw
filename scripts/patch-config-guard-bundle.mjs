@@ -24,6 +24,14 @@
  * branch, which only suppresses config-health recording and still triggers the
  * capture. This script repairs that shape as well.
  *
+ * Bundle shape notes:
+ *   OpenClaw 2026.10.9 ships this assignment under the identifier
+ *   `configSnapshotOptions`, with `commandName` / `isRestartController`.
+ *   OpenClaw 2026.11.5 is the same two-level ternary and the same preflight
+ *   conjunction, but the local bindings are minified (e.g. `p`, `a`, `u`).
+ *   The patch discovers those bindings from the bundle and applies the same
+ *   rewrite; it does not relax verification if the shape cannot be proven.
+ *
  * The patch is idempotent, and it fails loudly on a bundle shape it does not
  * understand: a silent no-op would ship an image whose reserved roots still
  * build captures. Every patched file is re-read and re-verified after the
@@ -42,24 +50,87 @@ import path from "node:path";
 const DIST = process.env.CONFIG_GUARD_BUNDLE_DIR ?? "/app/dist";
 const REPORT = process.env.CONFIG_GUARD_PATCH_REPORT ?? "/tmp/config-guard-patch.json";
 
-const PREFLIGHT_OLD = 'commandName !== "sessions" && !isRestartController';
-const PREFLIGHT_NEW =
-  'commandName !== "sessions" && commandName !== "tool" && commandName !== "tools" && !isRestartController';
+const IDENT = "[A-Za-z_$][A-Za-z0-9_$]*";
 
 /**
  * Longest term first: "tools" must be recognised before "tool", so a term is
  * never matched as a prefix of the other one.
  */
-const TOOL_TERMS = ['commandName === "tools"', 'commandName === "tool"'];
+function toolTerms(commandNameIdent) {
+  return [`${commandNameIdent} === "tools"`, `${commandNameIdent} === "tool"`];
+}
+
+function preflightNeedle(commandNameIdent, restartIdent) {
+  return `${commandNameIdent} !== "sessions" && !${restartIdent}`;
+}
+
+function preflightReplacement(commandNameIdent, restartIdent) {
+  return (
+    `${commandNameIdent} !== "sessions" && ${commandNameIdent} !== "tool" && ` +
+    `${commandNameIdent} !== "tools" && !${restartIdent}`
+  );
+}
 
 /**
- * Matches the whole snapshot statement:
- *   const configSnapshotOptions = <condA> ? <coreOnly> : <condB> ? <observe> : <tail>;
- * The two object literals are captured verbatim so their original formatting
- * (the core-only object is multi-line in the shipped bundle) survives.
+ * Matches a two-level snapshot ternary:
+ *   const <name> = <condA> ? <coreOnly> : <condB> ? <observe> : <tail>;
+ * The identifier is no longer hard-coded as `configSnapshotOptions`, because
+ * 2026.11.5 minifies it. Semantic checks after the match still require the
+ * core-only object, the observe object, and a validateConfigOnly condition.
  */
-const SNAPSHOT_RE =
-  /const configSnapshotOptions = (?<condA>[\s\S]*?) \? (?<coreOnly>\{[\s\S]*?\}) : (?<condB>[\s\S]*?) \? (?<observe>\{[\s\S]*?\}) : (?<tail>[^;]*);/;
+// condA/condB are expressions, not statements: they must not contain braces or
+// semicolons. That keeps the match anchored to the snapshot ternary itself
+// instead of swallowing an earlier `const` and the real assignment inside
+// a non-greedy scan. The object literals are likewise required to be flat.
+const SNAPSHOT_RE = new RegExp(
+  String.raw`const (?<name>${IDENT}) = (?<condA>[^;{}]+?) \? (?<coreOnly>\{[^{}]*pluginValidation: "core-only"[^{}]*\}) : (?<condB>[^;{}]+?) \? (?<observe>\{[^{}]*observe: false[^{}]*\}) : (?<tail>[^;{}]+);`,
+);
+
+/**
+ * The binding that holds commandPath[0] (commandName in 2026.10.9; a minified
+ * local such as `a` in 2026.11.5). Fail if it cannot be proven.
+ */
+function discoverCommandNameIdent(source) {
+  const direct = source.match(
+    new RegExp(String.raw`(?:const|let|var)\s+(${IDENT})\s*=\s*commandPath\s*\[\s*0\s*\]`),
+  );
+  if (direct) return direct[1];
+
+  const pathBinding = source.match(
+    new RegExp(
+      String.raw`(?:const|let|var)\s+(${IDENT})\s*=\s*${IDENT}\.commandPath\s*\?\?\s*\[\s*\]`,
+    ),
+  );
+  if (pathBinding) {
+    const fromArray = source.match(
+      new RegExp(String.raw`(?:const|let|var)\s+(${IDENT})\s*=\s*${pathBinding[1]}\s*\[\s*0\s*\]`),
+    );
+    if (fromArray) return fromArray[1];
+  }
+
+  throw new Error(
+    "config-guard bundle: could not locate the commandName binding; " +
+      "the bundle shape changed and the patch cannot be verified",
+  );
+}
+
+/**
+ * The binding for the gateway/daemon restart-controller predicate.
+ */
+function discoverRestartControllerIdent(source, commandNameIdent) {
+  const match = source.match(
+    new RegExp(
+      String.raw`(?:const|let|var)\s+(${IDENT})\s*=\s*\(\s*${commandNameIdent}\s*===\s*"gateway"\s*\|\|\s*${commandNameIdent}\s*===\s*"daemon"\s*\)`,
+    ),
+  );
+  if (!match) {
+    throw new Error(
+      "config-guard bundle: could not locate the isRestartController binding; " +
+        "the bundle shape changed and the patch cannot be verified",
+    );
+  }
+  return match[1];
+}
 
 /**
  * Splits a condition into its top-level `||` operands.
@@ -112,8 +183,8 @@ function splitTopLevelOr(condition) {
  * is merely a prefix of an operand (for example `isRestartControllers`) is not
  * a reserved root and must never be stripped.
  */
-function isToolTerm(operand) {
-  return TOOL_TERMS.includes(operand.trim());
+function isToolTerm(operand, terms) {
+  return terms.includes(operand.trim());
 }
 
 /**
@@ -121,14 +192,14 @@ function isToolTerm(operand) {
  * separators that introduced them. Operands are matched exactly, so a
  * condition can never lose more than the reserved roots themselves.
  */
-function stripToolTerms(condition) {
+function stripToolTerms(condition, terms) {
   return splitTopLevelOr(condition)
-    .filter((operand) => !isToolTerm(operand))
+    .filter((operand) => !isToolTerm(operand, terms))
     .join(" || ");
 }
 
-function hasToolTerm(condition) {
-  return splitTopLevelOr(condition).some((operand) => isToolTerm(operand));
+function hasToolTerm(condition, terms) {
+  return splitTopLevelOr(condition).some((operand) => isToolTerm(operand, terms));
 }
 
 /**
@@ -206,53 +277,64 @@ function findTargets() {
   return targets;
 }
 
+function snapshotSemanticErrors(groups) {
+  const { condA, coreOnly, observe } = groups;
+  if (!coreOnly.includes('pluginValidation: "core-only"')) {
+    return 'the core-only branch does not carry pluginValidation: "core-only"';
+  }
+  if (!observe.includes("observe: false")) {
+    return "the observe branch does not carry observe: false";
+  }
+  // Property access is required so a coincidental identifier is not enough.
+  // The receiver may be `params` (2026.10.9) or a minified local (2026.11.5).
+  if (!/\.validateConfigOnly\b/.test(condA)) {
+    return "the first snapshot condition does not reference validateConfigOnly";
+  }
+  return null;
+}
+
 /**
  * Parses the snapshot statement and reports the conditions it found.
  */
 function parseSnapshot(source) {
-  const match = source.match(SNAPSHOT_RE);
-  if (!match) {
+  const candidates = [];
+  for (const match of source.matchAll(new RegExp(SNAPSHOT_RE, "g"))) {
+    const error = snapshotSemanticErrors(match.groups);
+    if (!error) {
+      candidates.push(match);
+    }
+  }
+  if (candidates.length === 0) {
     throw new Error(
       "config-guard bundle: could not locate the configSnapshotOptions statement; " +
         "the bundle shape changed and the patch cannot be verified",
     );
   }
-  const { condA, coreOnly, condB, observe, tail } = match.groups;
-  if (!coreOnly.includes('pluginValidation: "core-only"')) {
+  if (candidates.length !== 1) {
     throw new Error(
-      'config-guard bundle: the core-only branch does not carry pluginValidation: "core-only"; ' +
-        "the patch cannot be verified",
+      "config-guard bundle: found more than one configSnapshotOptions statement; " +
+        "the bundle shape changed and the patch cannot be verified",
     );
   }
-  if (!observe.includes("observe: false")) {
-    throw new Error(
-      "config-guard bundle: the observe branch does not carry observe: false; " +
-        "the patch cannot be verified",
-    );
-  }
-  if (!condA.includes("params.validateConfigOnly")) {
-    throw new Error(
-      "config-guard bundle: the first snapshot condition does not reference params.validateConfigOnly; " +
-        "the patch cannot be verified",
-    );
-  }
-  return { statement: match[0], condA, coreOnly, condB, observe, tail };
+  const match = candidates[0];
+  const { name, condA, coreOnly, condB, observe, tail } = match.groups;
+  return { statement: match[0], name, condA, coreOnly, condB, observe, tail };
 }
 
 /**
  * Rewrites the snapshot statement so the reserved roots use core-only plugin
  * validation. Returns the patched statement plus the changes that were made.
  */
-function patchSnapshotStatement(parsed) {
-  const { statement: original, condA, coreOnly, condB, observe, tail } = parsed;
+function patchSnapshotStatement(parsed, terms) {
+  const { statement: original, name, condA, coreOnly, condB, observe, tail } = parsed;
 
   // Whether the reserved roots still sit on the observe-only branch has to be
   // decided on the *original* condition: the stripped condition never carries
   // a reserved root by construction, so asking the stripped value would
   // always answer "no" and hide a half-applied patch.
-  const movedFromObserveBranch = hasToolTerm(condB);
-  const nextCondB = stripToolTerms(condB);
-  const alreadyOnCoreOnlyBranch = hasToolTerm(condA);
+  const movedFromObserveBranch = hasToolTerm(condB, terms);
+  const nextCondB = stripToolTerms(condB, terms);
+  const alreadyOnCoreOnlyBranch = hasToolTerm(condA, terms);
 
   // Stripping must never invent or mangle an identifier. If a term were
   // matched as a prefix of a longer operand, the result would reference an
@@ -274,11 +356,9 @@ function patchSnapshotStatement(parsed) {
     return { original, statement: original, changes: [], status: "already-patched" };
   }
 
-  const nextCondA = alreadyOnCoreOnlyBranch
-    ? condA
-    : `${condA.trim()} || ${TOOL_TERMS.join(" || ")}`;
+  const nextCondA = alreadyOnCoreOnlyBranch ? condA : `${condA.trim()} || ${terms.join(" || ")}`;
 
-  const statement = `const configSnapshotOptions = ${nextCondA} ? ${coreOnly} : ${nextCondB} ? ${observe} : ${tail};`;
+  const statement = `const ${name} = ${nextCondA} ? ${coreOnly} : ${nextCondB} ? ${observe} : ${tail};`;
   assertStatementSyntax(statement, "the patched configSnapshotOptions statement");
   const changes = [];
   if (movedFromObserveBranch) {
@@ -296,9 +376,12 @@ function patchSnapshotStatement(parsed) {
  */
 function verifyFile(file, expectPreflightSkipped, options = {}) {
   const source = fs.readFileSync(file, "utf8");
+  const commandNameIdent = discoverCommandNameIdent(source);
+  const restartIdent = discoverRestartControllerIdent(source, commandNameIdent);
+  const terms = toolTerms(commandNameIdent);
   const parsed = parseSnapshot(source);
 
-  if (hasToolTerm(parsed.condB)) {
+  if (hasToolTerm(parsed.condB, terms)) {
     throw new Error(
       `config-guard bundle: ${file} still references the reserved roots on the observe-only branch`,
     );
@@ -306,7 +389,7 @@ function verifyFile(file, expectPreflightSkipped, options = {}) {
   // The reserved roots must be complete operands of the core-only condition.
   // A mere substring hit would also be satisfied by a mangled identifier such
   // as `isRestartControllers`.
-  for (const term of TOOL_TERMS) {
+  for (const term of terms) {
     if (!splitTopLevelOr(parsed.condA).includes(term)) {
       throw new Error(
         `config-guard bundle: ${file} does not route ${term} through the core-only branch`,
@@ -328,36 +411,49 @@ function verifyFile(file, expectPreflightSkipped, options = {}) {
   }
 
   if (expectPreflightSkipped) {
-    for (const term of ['commandName !== "tool"', 'commandName !== "tools"']) {
+    for (const term of [`${commandNameIdent} !== "tool"`, `${commandNameIdent} !== "tools"`]) {
       if (!source.includes(term)) {
         throw new Error(
           `config-guard bundle: ${file} still runs the startup preflight for the reserved roots`,
         );
       }
     }
+    // The skip terms must sit in the same preflight conjunction as the
+    // sessions / restart-controller guards, not in an unrelated string.
+    const needle = preflightReplacement(commandNameIdent, restartIdent);
+    if (!source.includes(needle)) {
+      throw new Error(
+        `config-guard bundle: ${file} does not skip the startup preflight with the expected condition`,
+      );
+    }
   }
 }
 
 function patchFile(file) {
   const original = fs.readFileSync(file, "utf8");
-  const alreadyPreflight = original.includes('commandName !== "tool"');
+  const commandNameIdent = discoverCommandNameIdent(original);
+  const restartIdent = discoverRestartControllerIdent(original, commandNameIdent);
+  const terms = toolTerms(commandNameIdent);
+  const alreadyPreflight = original.includes(`${commandNameIdent} !== "tool"`);
 
   const parsed = parseSnapshot(original);
   // The patch may only reshape the existing condition; it must never introduce
   // a new identifier (e.g. a mangled `commandName` variant). The allowed set is
   // derived from the file as it was before the patch.
   const allowedIdentifiers = identifiersOf(original);
-  const snapshot = patchSnapshotStatement(parsed);
+  const snapshot = patchSnapshotStatement(parsed, terms);
 
   let next = original;
   const changes = [];
   if (!alreadyPreflight) {
-    if (!next.includes(PREFLIGHT_OLD)) {
+    const oldNeedle = preflightNeedle(commandNameIdent, restartIdent);
+    const occurrences = next.split(oldNeedle).length - 1;
+    if (occurrences !== 1) {
       throw new Error(
-        `config-guard bundle: ${file} does not contain the expected startup preflight condition`,
+        `config-guard bundle: ${file} does not contain exactly one expected startup preflight condition`,
       );
     }
-    next = next.replace(PREFLIGHT_OLD, PREFLIGHT_NEW);
+    next = next.replace(oldNeedle, preflightReplacement(commandNameIdent, restartIdent));
     changes.push("skip-startup-preflight");
   }
   if (snapshot.status === "patched") {
