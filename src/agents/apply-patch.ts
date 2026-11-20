@@ -90,6 +90,7 @@ export function createApplyPatchTool(
     root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    strictWorkspaceRoot?: boolean;
     containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -126,6 +127,7 @@ export function createApplyPatchTool(
           root,
           sandbox,
           workspaceOnly,
+          strictWorkspaceRoot: options.strictWorkspaceRoot,
           memoryWriteProvenance: options.memoryWriteProvenance,
           signal: executionSignal,
         });
@@ -785,7 +787,7 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.root ?? options.cwd,
-          allowLinkedWorktrees: true,
+          allowLinkedWorktrees: !options.strictWorkspaceRoot,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
